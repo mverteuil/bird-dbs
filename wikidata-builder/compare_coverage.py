@@ -111,7 +111,11 @@ def compare_databases(wikidata_stats: dict, patlevin_stats: dict) -> dict[str, A
 
         # Coverage as percentage of species in each database
         wd_coverage = (wd_count / wikidata_species * 100) if wikidata_species > 0 else 0
-        pl_coverage = (pl_count / patlevin_stats["species_count"] * 100) if patlevin_stats["species_count"] > 0 else 0
+        pl_coverage = (
+            (pl_count / patlevin_stats["species_count"] * 100)
+            if patlevin_stats["species_count"] > 0
+            else 0
+        )
 
         coverage_comparison[lang] = {
             "wikidata_count": wd_count,
@@ -128,9 +132,7 @@ def compare_databases(wikidata_stats: dict, patlevin_stats: dict) -> dict[str, A
     }
 
 
-def print_comparison_report(
-    wikidata_stats: dict, patlevin_stats: dict, comparison: dict
-) -> None:
+def print_comparison_report(wikidata_stats: dict, patlevin_stats: dict, comparison: dict) -> None:
     """Print formatted comparison report.
 
     Args:
@@ -148,10 +150,18 @@ def print_comparison_report(
     print()
     print(f"{'Metric':<35} {'Wikidata':>15} {'PatLevin':>15}")
     print("-" * 80)
-    print(f"{'Species Count':<35} {wikidata_stats['species_count']:>15,} {patlevin_stats['species_count']:>15,}")
-    print(f"{'Translation Count':<35} {wikidata_stats['translation_count']:>15,} {patlevin_stats['translation_count']:>15,}")
-    print(f"{'Language Count':<35} {wikidata_stats['language_count']:>15} {patlevin_stats['language_count']:>15}")
-    print(f"{'Avg Translations/Species':<35} {wikidata_stats['avg_translations_per_species']:>15.2f} {patlevin_stats['avg_translations_per_species']:>15.2f}")
+    print(
+        f"{'Species Count':<35} {wikidata_stats['species_count']:>15,} {patlevin_stats['species_count']:>15,}"
+    )
+    print(
+        f"{'Translation Count':<35} {wikidata_stats['translation_count']:>15,} {patlevin_stats['translation_count']:>15,}"
+    )
+    print(
+        f"{'Language Count':<35} {wikidata_stats['language_count']:>15} {patlevin_stats['language_count']:>15}"
+    )
+    print(
+        f"{'Avg Translations/Species':<35} {wikidata_stats['avg_translations_per_species']:>15.2f} {patlevin_stats['avg_translations_per_species']:>15.2f}"
+    )
     print()
 
     # Language overlap
@@ -163,12 +173,12 @@ def print_comparison_report(
     print()
 
     if comparison["wikidata_only_languages"]:
-        print(f"  Languages in Wikidata but not PatLevin:")
+        print("  Languages in Wikidata but not PatLevin:")
         print(f"    {', '.join(comparison['wikidata_only_languages'])}")
         print()
 
     if comparison["patlevin_only_languages"]:
-        print(f"  Languages in PatLevin but not Wikidata:")
+        print("  Languages in PatLevin but not Wikidata:")
         print(f"    {', '.join(comparison['patlevin_only_languages'])}")
         print()
 
@@ -203,19 +213,25 @@ def print_comparison_report(
     print()
 
     # Calculate key metrics for recommendation
-    wikidata_langs_set = set(comparison["shared_languages"]) | set(comparison["wikidata_only_languages"])
-    patlevin_langs_set = set(comparison["shared_languages"]) | set(comparison["patlevin_only_languages"])
+    patlevin_langs_set = set(comparison["shared_languages"]) | set(
+        comparison["patlevin_only_languages"]
+    )
     lang_coverage_pct = len(comparison["shared_languages"]) / len(patlevin_langs_set) * 100
 
     # Count languages where Wikidata has >90% coverage
     high_coverage_langs = sum(
-        1 for coverage in comparison["coverage_comparison"].values()
+        1
+        for coverage in comparison["coverage_comparison"].values()
         if coverage["wikidata_coverage"] > 90
     )
 
-    print(f"✓ Wikidata POC covers {len(comparison['shared_languages'])}/{len(patlevin_langs_set)} PatLevin languages ({lang_coverage_pct:.1f}%)")
+    print(
+        f"✓ Wikidata POC covers {len(comparison['shared_languages'])}/{len(patlevin_langs_set)} PatLevin languages ({lang_coverage_pct:.1f}%)"
+    )
     print(f"✓ Wikidata has {high_coverage_langs} languages with >90% coverage")
-    print(f"✓ Wikidata adds {len(comparison['wikidata_only_languages'])} new languages not in PatLevin")
+    print(
+        f"✓ Wikidata adds {len(comparison['wikidata_only_languages'])} new languages not in PatLevin"
+    )
     print()
 
     # Missing critical languages
@@ -247,7 +263,9 @@ def print_comparison_report(
         print()
         print("Concerns:")
         if lang_coverage_pct < 85:
-            print(f"  • Only covers {lang_coverage_pct:.1f}% of PatLevin languages (<85% threshold)")
+            print(
+                f"  • Only covers {lang_coverage_pct:.1f}% of PatLevin languages (<85% threshold)"
+            )
         if missing_critical:
             print(f"  • Missing critical languages: {', '.join(missing_critical)}")
         print()

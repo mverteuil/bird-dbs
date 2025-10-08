@@ -12,7 +12,7 @@ pub struct EBirdRecord {
     pub common_name: String,
 
     #[serde(rename = "OBSERVATION COUNT")]
-    pub observation_count: String,  // "X" or number
+    pub observation_count: String, // "X" or number
 
     #[serde(rename = "LATITUDE")]
     pub latitude: f64,
@@ -21,7 +21,7 @@ pub struct EBirdRecord {
     pub longitude: f64,
 
     #[serde(rename = "OBSERVATION DATE")]
-    pub observation_date: String,  // Will parse to NaiveDate
+    pub observation_date: String, // Will parse to NaiveDate
 
     #[serde(rename = "SAMPLING EVENT IDENTIFIER")]
     pub sampling_event_id: String,
@@ -30,10 +30,10 @@ pub struct EBirdRecord {
     pub group_identifier: Option<String>,
 
     #[serde(rename = "ALL SPECIES REPORTED")]
-    pub all_species_reported: String,  // "1" or "0"
+    pub all_species_reported: String, // "1" or "0"
 
     #[serde(rename = "APPROVED")]
-    pub approved: String,  // "1" or "0"
+    pub approved: String, // "1" or "0"
 
     #[serde(rename = "CATEGORY", default)]
     pub category: Option<String>,
@@ -56,11 +56,19 @@ impl EBirdRecord {
     }
 
     pub fn is_native(&self) -> bool {
-        self.exotic_code.is_none() || self.exotic_code.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+        self.exotic_code.is_none()
+            || self
+                .exotic_code
+                .as_ref()
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
     }
 
     pub fn is_species(&self) -> bool {
-        self.category.as_ref().map(|c| c == "species").unwrap_or(true)
+        self.category
+            .as_ref()
+            .map(|c| c == "species")
+            .unwrap_or(true)
     }
 
     pub fn get_count(&self) -> u32 {

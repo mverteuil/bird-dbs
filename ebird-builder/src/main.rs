@@ -54,9 +54,7 @@ fn main() -> Result<()> {
     // Process CSV file
     info!("Reading eBird data from {:?}", cli.input);
     let file = File::open(&cli.input)?;
-    let mut rdr = csv::ReaderBuilder::new()
-        .delimiter(b'\t')
-        .from_reader(file);
+    let mut rdr = csv::ReaderBuilder::new().delimiter(b'\t').from_reader(file);
 
     let mut record_count = 0;
     let mut filtered_count = 0;
@@ -66,7 +64,10 @@ fn main() -> Result<()> {
         record_count += 1;
 
         if record_count % 10000 == 0 {
-            info!("Processed {} records ({} filtered)", record_count, filtered_count);
+            info!(
+                "Processed {} records ({} filtered)",
+                record_count, filtered_count
+            );
         }
 
         // Apply filters
@@ -91,7 +92,10 @@ fn main() -> Result<()> {
         }
 
         // Geographic filter
-        if !config.bounding_box.contains(record.latitude, record.longitude) {
+        if !config
+            .bounding_box
+            .contains(record.latitude, record.longitude)
+        {
             filtered_count += 1;
             continue;
         }

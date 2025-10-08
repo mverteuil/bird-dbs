@@ -20,16 +20,15 @@ import openpyxl
 
 if TYPE_CHECKING:
     from openpyxl.worksheet.worksheet import Worksheet
-from sqlalchemy import create_engine, delete, text
-from sqlalchemy.orm import Session, sessionmaker
-from sqlmodel import SQLModel
-
 from birdnetpi.utils.ioc_models import (
     IOCLanguage,
     IOCMetadata,
     IOCSpecies,
     IOCTranslation,
 )
+from sqlalchemy import create_engine, delete, text
+from sqlalchemy.orm import Session, sessionmaker
+from sqlmodel import SQLModel
 
 
 class IocDatabaseBuilder:

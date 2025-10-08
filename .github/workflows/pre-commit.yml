@@ -1,6 +1,7 @@
+---
 name: Pre-commit Checks
 
-on:
+'on':
   pull_request:
   push:
     branches: [main]
@@ -22,11 +23,9 @@ jobs:
           enable-cache: true
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           components: rustfmt, clippy
-          override: true
 
       - name: Install system dependencies
         run: |

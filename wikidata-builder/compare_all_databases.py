@@ -229,7 +229,9 @@ class DatabaseAnalyzer:
     ) -> dict[str, Any]:
         """Compare IOC + Wikidata combined coverage against PatLevin."""
         # Merge IOC and Wikidata languages
-        combined_langs = set(ioc_stats["languages"].keys()) | set(wikidata_stats["languages"].keys())
+        combined_langs = set(ioc_stats["languages"].keys()) | set(
+            wikidata_stats["languages"].keys()
+        )
         patlevin_langs = set(patlevin_stats["languages"].keys())
 
         # Language overlap
@@ -303,19 +305,23 @@ class DatabaseAnalyzer:
                 # All 3 have this translation
                 if ioc_name and wd_name and pl_name:
                     if ioc_name == wd_name == pl_name:
-                        matches.append({
-                            "species": species,
-                            "language": lang,
-                            "translation": ioc_name,
-                        })
+                        matches.append(
+                            {
+                                "species": species,
+                                "language": lang,
+                                "translation": ioc_name,
+                            }
+                        )
                     else:
-                        differences.append({
-                            "species": species,
-                            "language": lang,
-                            "ioc": ioc_name,
-                            "wikidata": wd_name,
-                            "patlevin": pl_name,
-                        })
+                        differences.append(
+                            {
+                                "species": species,
+                                "language": lang,
+                                "ioc": ioc_name,
+                                "wikidata": wd_name,
+                                "patlevin": pl_name,
+                            }
+                        )
 
         return {
             "common_species_count": len(common_species),
@@ -344,20 +350,30 @@ def print_comprehensive_report(
     # Overall statistics
     print("📊 Overall Statistics:")
     print()
-    print(f"{'Database':<20} {'Species':>12} {'Translations':>15} {'Languages':>12} {'Avg/Species':>12}")
+    print(
+        f"{'Database':<20} {'Species':>12} {'Translations':>15} {'Languages':>12} {'Avg/Species':>12}"
+    )
     print("-" * 80)
-    print(f"{'Wikidata (POC)':<20} {wikidata_stats['species_count']:>12,} "
-          f"{wikidata_stats['translation_count']:>15,} {wikidata_stats['language_count']:>12} "
-          f"{wikidata_stats['translation_count']/wikidata_stats['species_count']:>12.2f}")
-    print(f"{'IOC Reference':<20} {ioc_stats['species_count']:>12,} "
-          f"{ioc_stats['translation_count']:>15,} {ioc_stats['language_count']:>12} "
-          f"{ioc_stats['translation_count']/ioc_stats['species_count']:>12.2f}")
-    print(f"{'PatLevin':<20} {patlevin_stats['species_count']:>12,} "
-          f"{patlevin_stats['translation_count']:>15,} {patlevin_stats['language_count']:>12} "
-          f"{patlevin_stats['translation_count']/patlevin_stats['species_count']:>12.2f}")
-    print(f"{'Avibase (BNP)':<20} {avibase_stats['species_count']:>12,} "
-          f"{avibase_stats['translation_count']:>15,} {avibase_stats['language_count']:>12} "
-          f"{avibase_stats['translation_count']/avibase_stats['species_count']:>12.2f}")
+    print(
+        f"{'Wikidata (POC)':<20} {wikidata_stats['species_count']:>12,} "
+        f"{wikidata_stats['translation_count']:>15,} {wikidata_stats['language_count']:>12} "
+        f"{wikidata_stats['translation_count'] / wikidata_stats['species_count']:>12.2f}"
+    )
+    print(
+        f"{'IOC Reference':<20} {ioc_stats['species_count']:>12,} "
+        f"{ioc_stats['translation_count']:>15,} {ioc_stats['language_count']:>12} "
+        f"{ioc_stats['translation_count'] / ioc_stats['species_count']:>12.2f}"
+    )
+    print(
+        f"{'PatLevin':<20} {patlevin_stats['species_count']:>12,} "
+        f"{patlevin_stats['translation_count']:>15,} {patlevin_stats['language_count']:>12} "
+        f"{patlevin_stats['translation_count'] / patlevin_stats['species_count']:>12.2f}"
+    )
+    print(
+        f"{'Avibase (BNP)':<20} {avibase_stats['species_count']:>12,} "
+        f"{avibase_stats['translation_count']:>15,} {avibase_stats['language_count']:>12} "
+        f"{avibase_stats['translation_count'] / avibase_stats['species_count']:>12.2f}"
+    )
     print()
 
     # IOC + Wikidata vs PatLevin
@@ -375,43 +391,49 @@ def print_comprehensive_report(
     print(f"PatLevin only: {len(ioc_wd_vs_pl['patlevin_only_languages'])}")
     print()
 
-    if ioc_wd_vs_pl['combined_only_languages']:
-        print(f"Languages in IOC+Wikidata but not PatLevin:")
+    if ioc_wd_vs_pl["combined_only_languages"]:
+        print("Languages in IOC+Wikidata but not PatLevin:")
         print(f"  {', '.join(ioc_wd_vs_pl['combined_only_languages'][:20])}")
-        if len(ioc_wd_vs_pl['combined_only_languages']) > 20:
+        if len(ioc_wd_vs_pl["combined_only_languages"]) > 20:
             print(f"  ... and {len(ioc_wd_vs_pl['combined_only_languages']) - 20} more")
         print()
 
-    if ioc_wd_vs_pl['patlevin_only_languages']:
-        print(f"Languages in PatLevin but not IOC+Wikidata:")
+    if ioc_wd_vs_pl["patlevin_only_languages"]:
+        print("Languages in PatLevin but not IOC+Wikidata:")
         print(f"  {', '.join(ioc_wd_vs_pl['patlevin_only_languages'])}")
         print()
 
     # Language-by-language comparison
     print("📈 Language Coverage Comparison (IOC + Wikidata vs PatLevin):")
     print()
-    print(f"{'Lang':>5} {'IOC':>10} {'Wikidata':>10} {'Combined':>10} {'PatLevin':>10} {'Exceeds':>8}")
+    print(
+        f"{'Lang':>5} {'IOC':>10} {'Wikidata':>10} {'Combined':>10} {'PatLevin':>10} {'Exceeds':>8}"
+    )
     print("-" * 80)
 
     exceeds_count = 0
     for lang, comparison in sorted(
-        ioc_wd_vs_pl['language_comparison'].items(),
-        key=lambda x: x[1]['combined_approx'],
-        reverse=True
+        ioc_wd_vs_pl["language_comparison"].items(),
+        key=lambda x: x[1]["combined_approx"],
+        reverse=True,
     )[:25]:
-        ioc_count = comparison['ioc_count']
-        wd_count = comparison['wikidata_count']
-        combined = comparison['combined_approx']
-        pl_count = comparison['patlevin_count']
-        exceeds = "✓" if comparison['exceeds_patlevin'] else "✗"
+        ioc_count = comparison["ioc_count"]
+        wd_count = comparison["wikidata_count"]
+        combined = comparison["combined_approx"]
+        pl_count = comparison["patlevin_count"]
+        exceeds = "✓" if comparison["exceeds_patlevin"] else "✗"
 
-        if comparison['exceeds_patlevin']:
+        if comparison["exceeds_patlevin"]:
             exceeds_count += 1
 
-        print(f"{lang:>5} {ioc_count:>10,} {wd_count:>10,} {combined:>10,} {pl_count:>10,} {exceeds:>8}")
+        print(
+            f"{lang:>5} {ioc_count:>10,} {wd_count:>10,} {combined:>10,} {pl_count:>10,} {exceeds:>8}"
+        )
 
     print()
-    print(f"Languages where IOC+Wikidata exceeds PatLevin: {exceeds_count}/{len(ioc_wd_vs_pl['shared_languages'])}")
+    print(
+        f"Languages where IOC+Wikidata exceeds PatLevin: {exceeds_count}/{len(ioc_wd_vs_pl['shared_languages'])}"
+    )
     print()
 
     # Translation differences
@@ -425,16 +447,18 @@ def print_comprehensive_report(
     print(f"Total differing translations: {translation_diffs['total_differences']:,}")
     print()
 
-    if translation_diffs['total_differences'] > 0:
-        match_pct = translation_diffs['total_matches'] / (
-            translation_diffs['total_matches'] + translation_diffs['total_differences']
-        ) * 100
+    if translation_diffs["total_differences"] > 0:
+        match_pct = (
+            translation_diffs["total_matches"]
+            / (translation_diffs["total_matches"] + translation_diffs["total_differences"])
+            * 100
+        )
         print(f"Match rate: {match_pct:.1f}%")
         print()
 
         print("Examples of translation differences:")
         print()
-        for diff in translation_diffs['difference_examples'][:10]:
+        for diff in translation_diffs["difference_examples"][:10]:
             print(f"  {diff['species']} [{diff['language']}]:")
             print(f"    IOC:      {diff['ioc']}")
             print(f"    Wikidata: {diff['wikidata']}")
@@ -450,8 +474,8 @@ def print_comprehensive_report(
     print(f"Languages: {avibase_stats['language_count']}")
     print()
     print("Language breakdown:")
-    for lang, count in sorted(avibase_stats['languages'].items(), key=lambda x: x[1], reverse=True):
-        pct = count / avibase_stats['species_count'] * 100
+    for lang, count in sorted(avibase_stats["languages"].items(), key=lambda x: x[1], reverse=True):
+        pct = count / avibase_stats["species_count"] * 100
         print(f"  {lang:>10}: {count:>6,} ({pct:>5.1f}%)")
     print()
     print("⚠️  Avibase database is 87% Czech (cs) translations only")
@@ -464,22 +488,35 @@ def print_comprehensive_report(
     print("=" * 80)
     print()
 
-    if ioc_wd_vs_pl['coverage_percentage'] >= 95 and exceeds_count >= len(ioc_wd_vs_pl['shared_languages']) * 0.8:
+    if (
+        ioc_wd_vs_pl["coverage_percentage"] >= 95
+        and exceeds_count >= len(ioc_wd_vs_pl["shared_languages"]) * 0.8
+    ):
         print("✅ RECOMMENDATION: Use IOC + Wikidata, DROP PatLevin")
         print()
         print("Rationale:")
-        print(f"  • Combined coverage: {ioc_wd_vs_pl['coverage_percentage']:.1f}% of PatLevin languages")
-        print(f"  • Exceeds PatLevin in {exceeds_count}/{len(ioc_wd_vs_pl['shared_languages'])} shared languages")
-        print(f"  • Adds {len(ioc_wd_vs_pl['combined_only_languages'])} languages PatLevin doesn't have")
-        print(f"  • Both IOC and Wikidata actively maintained")
-        print(f"  • Clear licenses (IOC: CC-BY-4.0, Wikidata: CC0)")
+        print(
+            f"  • Combined coverage: {ioc_wd_vs_pl['coverage_percentage']:.1f}% of PatLevin languages"
+        )
+        print(
+            f"  • Exceeds PatLevin in {exceeds_count}/{len(ioc_wd_vs_pl['shared_languages'])} shared languages"
+        )
+        print(
+            f"  • Adds {len(ioc_wd_vs_pl['combined_only_languages'])} languages PatLevin doesn't have"
+        )
+        print("  • Both IOC and Wikidata actively maintained")
+        print("  • Clear licenses (IOC: CC-BY-4.0, Wikidata: CC0)")
         print()
     else:
         print("⚠️  RECOMMENDATION: Keep PatLevin as supplement")
         print()
         print("Concerns:")
-        print(f"  • Combined coverage: {ioc_wd_vs_pl['coverage_percentage']:.1f}% of PatLevin languages")
-        print(f"  • Only exceeds PatLevin in {exceeds_count}/{len(ioc_wd_vs_pl['shared_languages'])} shared languages")
+        print(
+            f"  • Combined coverage: {ioc_wd_vs_pl['coverage_percentage']:.1f}% of PatLevin languages"
+        )
+        print(
+            f"  • Only exceeds PatLevin in {exceeds_count}/{len(ioc_wd_vs_pl['shared_languages'])} shared languages"
+        )
         print()
 
 
@@ -507,10 +544,14 @@ def main():
     avibase_stats = analyzer.get_avibase_stats()
 
     print("Comparing IOC + Wikidata vs PatLevin...")
-    ioc_wd_vs_pl = analyzer.compare_ioc_wikidata_vs_patlevin(ioc_stats, wikidata_stats, patlevin_stats)
+    ioc_wd_vs_pl = analyzer.compare_ioc_wikidata_vs_patlevin(
+        ioc_stats, wikidata_stats, patlevin_stats
+    )
 
     print("Finding translation differences...")
-    translation_diffs = analyzer.find_translation_differences(ioc_stats, wikidata_stats, patlevin_stats)
+    translation_diffs = analyzer.find_translation_differences(
+        ioc_stats, wikidata_stats, patlevin_stats
+    )
 
     print("\n")
 

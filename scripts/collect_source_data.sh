@@ -63,7 +63,8 @@ create_directories() {
 download_avilistr() {
     print_header "Downloading Avilistr World Bird List"
 
-    local today=$(date +%Y-%m-%d)
+    local today
+    today=$(date +%Y-%m-%d)
     local output_file="$SHARED_DIR/avilistr/world_birds_${today}.csv"
 
     print_info "Downloading from Avibase..."
@@ -93,11 +94,13 @@ download_avilistr() {
 
     # Verify download
     if [ -f "$output_file" ] && [ -s "$output_file" ]; then
-        local file_size=$(du -h "$output_file" | cut -f1)
+        local file_size
+        file_size=$(du -h "$output_file" | cut -f1)
         print_success "Downloaded Avilistr data: $output_file ($file_size)"
 
         # Quick validation
-        local line_count=$(wc -l < "$output_file")
+        local line_count
+        line_count=$(wc -l < "$output_file")
         if [ "$line_count" -gt 10000 ]; then
             print_success "Validation: File contains $line_count species entries"
         else
@@ -125,7 +128,8 @@ print_manual_avilistr_instructions() {
 check_ioc_files() {
     print_header "Checking IOC World Bird List Files"
 
-    local ioc_files=$(find "$DATA_DIR/ioc" -name "IOC_*.xlsx" 2>/dev/null | wc -l)
+    local ioc_files
+    ioc_files=$(find "$DATA_DIR/ioc" -name "IOC_*.xlsx" 2>/dev/null | wc -l)
 
     if [ "$ioc_files" -ge 2 ]; then
         print_success "Found IOC files:"
@@ -150,7 +154,8 @@ check_ioc_files() {
 check_ebird_data() {
     print_header "Checking eBird Basic Dataset (EBD)"
 
-    local ebd_files=$(find "$DATA_DIR/ebird" -name "ebd_rel*.tar" 2>/dev/null | wc -l)
+    local ebd_files
+    ebd_files=$(find "$DATA_DIR/ebird" -name "ebd_rel*.tar" 2>/dev/null | wc -l)
 
     if [ "$ebd_files" -ge 1 ]; then
         print_success "Found eBird EBD files:"

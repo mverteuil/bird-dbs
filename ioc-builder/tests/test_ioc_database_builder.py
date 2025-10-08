@@ -1,10 +1,12 @@
 """Tests for IOC database builder."""
 
-import pytest
-import pandas as pd
 import tempfile
 from pathlib import Path
+
+import pandas as pd
+import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ioc_database_builder import IOCDatabaseBuilder
@@ -23,45 +25,51 @@ def temp_db():
 @pytest.fixture
 def sample_ioc_species_data():
     """Sample IOC species data."""
-    return pd.DataFrame({
-        "Order": ["STRUTHIONIFORMES", "STRUTHIONIFORMES"],
-        "Family": ["Struthionidae", "Struthionidae"],
-        "Genus": ["Struthio", "Struthio"],
-        "Species": ["camelus", "molybdophanes"],
-        "English name": ["Common Ostrich", "Somali Ostrich"],
-        "Authority": ["Linnaeus, 1758", "Reichenow, 1883"],
-    })
+    return pd.DataFrame(
+        {
+            "Order": ["STRUTHIONIFORMES", "STRUTHIONIFORMES"],
+            "Family": ["Struthionidae", "Struthionidae"],
+            "Genus": ["Struthio", "Struthio"],
+            "Species": ["camelus", "molybdophanes"],
+            "English name": ["Common Ostrich", "Somali Ostrich"],
+            "Authority": ["Linnaeus, 1758", "Reichenow, 1883"],
+        }
+    )
 
 
 @pytest.fixture
 def sample_ioc_multilingual_data():
     """Sample IOC multilingual translation data."""
-    return pd.DataFrame({
-        "Scientific name": [
-            "Struthio camelus",
-            "Struthio camelus",
-            "Struthio molybdophanes",
-            "Struthio molybdophanes",
-        ],
-        "LanguageCode": ["es", "fr", "es", "fr"],
-        "CommonName": [
-            "Avestruz Común",
-            "Autruche d'Afrique",
-            "Avestruz Somalí",
-            "Autruche de Somalie",
-        ],
-    })
+    return pd.DataFrame(
+        {
+            "Scientific name": [
+                "Struthio camelus",
+                "Struthio camelus",
+                "Struthio molybdophanes",
+                "Struthio molybdophanes",
+            ],
+            "LanguageCode": ["es", "fr", "es", "fr"],
+            "CommonName": [
+                "Avestruz Común",
+                "Autruche d'Afrique",
+                "Avestruz Somalí",
+                "Autruche de Somalie",
+            ],
+        }
+    )
 
 
 @pytest.fixture
 def sample_avilistr_data():
     """Sample Avilistr data with Avibase ID mappings."""
-    return pd.DataFrame({
-        "scientific_name": ["Struthio camelus", "Struthio molybdophanes"],
-        "avibase_id": ["ABC123DEF456", "GHI789JKL012"],
-        "ioc_scientific_name": ["Struthio camelus", "Struthio molybdophanes"],
-        "clements_scientific_name": ["Struthio camelus", "Struthio molybdophanes"],
-    })
+    return pd.DataFrame(
+        {
+            "scientific_name": ["Struthio camelus", "Struthio molybdophanes"],
+            "avibase_id": ["ABC123DEF456", "GHI789JKL012"],
+            "ioc_scientific_name": ["Struthio camelus", "Struthio molybdophanes"],
+            "clements_scientific_name": ["Struthio camelus", "Struthio molybdophanes"],
+        }
+    )
 
 
 @pytest.fixture
@@ -75,16 +83,17 @@ class TestIOCDatabaseBuilder:
 
     def test_init_creates_database(self, temp_db):
         """Test that initialization creates database file."""
-        builder = IOCDatabaseBuilder(database_path=temp_db)
+        _ = IOCDatabaseBuilder(database_path=temp_db)
         assert Path(temp_db).exists()
 
     def test_init_creates_tables(self, temp_db):
         """Test that initialization creates required tables."""
-        builder = IOCDatabaseBuilder(database_path=temp_db)
+        _ = IOCDatabaseBuilder(database_path=temp_db)
         engine = create_engine(f"sqlite:///{temp_db}")
 
         # Check that tables exist
         from sqlalchemy import inspect
+
         inspector = inspect(engine)
         tables = inspector.get_table_names()
 
@@ -117,9 +126,7 @@ class TestIOCDatabaseBuilder:
         assert len(french) == 2
         assert any(t["common_name"] == "Autruche d'Afrique" for t in french)
 
-    def test_map_avibase_ids(
-        self, builder, sample_ioc_species_data, sample_avilistr_data
-    ):
+    def test_map_avibase_ids(self, builder, sample_ioc_species_data, sample_avilistr_data):
         """Test mapping Avibase IDs to IOC species."""
         species_list = builder._parse_species_data(sample_ioc_species_data)
         mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
@@ -128,25 +135,23 @@ class TestIOCDatabaseBuilder:
         assert mapped[0]["avibase_id"] == "ABC123DEF456"
         assert mapped[1]["avibase_id"] == "GHI789JKL012"
 
-    def test_map_avibase_ids_missing_species(
-        self, builder, sample_ioc_species_data
-    ):
+    def test_map_avibase_ids_missing_species(self, builder, sample_ioc_species_data):
         """Test that species without Avibase IDs are excluded."""
         species_list = builder._parse_species_data(sample_ioc_species_data)
 
         # Empty Avilistr data
-        empty_avilistr = pd.DataFrame({
-            "scientific_name": [],
-            "avibase_id": [],
-            "ioc_scientific_name": [],
-        })
+        empty_avilistr = pd.DataFrame(
+            {
+                "scientific_name": [],
+                "avibase_id": [],
+                "ioc_scientific_name": [],
+            }
+        )
 
         mapped = builder._map_avibase_ids(species_list, empty_avilistr)
         assert len(mapped) == 0
 
-    def test_insert_species(
-        self, builder, sample_ioc_species_data, sample_avilistr_data
-    ):
+    def test_insert_species(self, builder, sample_ioc_species_data, sample_avilistr_data):
         """Test inserting species into database."""
         species_list = builder._parse_species_data(sample_ioc_species_data)
         mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
@@ -209,39 +214,43 @@ class TestIOCDatabaseBuilder:
 
     def test_language_code_normalization(self, builder):
         """Test that language codes are normalized to lowercase."""
-        data = pd.DataFrame({
-            "Scientific name": ["Struthio camelus"],
-            "LanguageCode": ["ES"],  # Uppercase
-            "CommonName": ["Avestruz"],
-        })
+        data = pd.DataFrame(
+            {
+                "Scientific name": ["Struthio camelus"],
+                "LanguageCode": ["ES"],  # Uppercase
+                "CommonName": ["Avestruz"],
+            }
+        )
 
         translations = builder._parse_multilingual_data(data)
         assert translations[0]["language_code"] == "es"  # Should be lowercase
 
     def test_empty_translation_filtering(self, builder):
         """Test that empty translations are filtered out."""
-        data = pd.DataFrame({
-            "Scientific name": ["Struthio camelus", "Struthio molybdophanes"],
-            "LanguageCode": ["es", "fr"],
-            "CommonName": ["Avestruz", ""],  # Empty translation
-        })
+        data = pd.DataFrame(
+            {
+                "Scientific name": ["Struthio camelus", "Struthio molybdophanes"],
+                "LanguageCode": ["es", "fr"],
+                "CommonName": ["Avestruz", ""],  # Empty translation
+            }
+        )
 
         translations = builder._parse_multilingual_data(data)
         assert len(translations) == 1
         assert translations[0]["common_name"] == "Avestruz"
 
-    def test_scientific_name_matching_case_insensitive(
-        self, builder, sample_avilistr_data
-    ):
+    def test_scientific_name_matching_case_insensitive(self, builder, sample_avilistr_data):
         """Test that scientific name matching is case-insensitive."""
-        species_data = pd.DataFrame({
-            "Order": ["STRUTHIONIFORMES"],
-            "Family": ["Struthionidae"],
-            "Genus": ["Struthio"],
-            "Species": ["camelus"],
-            "English name": ["Common Ostrich"],
-            "Authority": ["Linnaeus, 1758"],
-        })
+        species_data = pd.DataFrame(
+            {
+                "Order": ["STRUTHIONIFORMES"],
+                "Family": ["Struthionidae"],
+                "Genus": ["Struthio"],
+                "Species": ["camelus"],
+                "English name": ["Common Ostrich"],
+                "Authority": ["Linnaeus, 1758"],
+            }
+        )
 
         # Use uppercase in Avilistr
         avilistr = sample_avilistr_data.copy()
@@ -253,9 +262,7 @@ class TestIOCDatabaseBuilder:
         assert len(mapped) == 1
         assert mapped[0]["avibase_id"] == "ABC123DEF456"
 
-    def test_validation_species_count(
-        self, builder, sample_ioc_species_data, sample_avilistr_data
-    ):
+    def test_validation_species_count(self, builder, sample_ioc_species_data, sample_avilistr_data):
         """Test validation of species count."""
         species_list = builder._parse_species_data(sample_ioc_species_data)
         mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
@@ -394,5 +401,5 @@ class TestIOCModels:
             )
             session.add(species2)
 
-            with pytest.raises(Exception):  # Should raise integrity error
+            with pytest.raises(IntegrityError):  # Should raise integrity error
                 session.commit()

@@ -163,7 +163,7 @@ class TranslationOverlapAnalyzer:
         removable_from_wikidata = 0
         removable_from_ioc = 0
 
-        for lang, details in overlap_analysis["language_details"].items():
+        for _lang, details in overlap_analysis["language_details"].items():
             # Strategy: Keep in IOC (primary), remove from Wikidata if identical
             removable_from_wikidata += details["identical_translations"]
 
@@ -179,11 +179,14 @@ class TranslationOverlapAnalyzer:
             "total_wikidata_translations": total_wd_translations,
             "removable_from_wikidata": removable_from_wikidata,
             "removable_from_ioc": removable_from_ioc,
-            "potential_savings_wikidata_kb": (removable_from_wikidata * bytes_per_translation) / 1024,
+            "potential_savings_wikidata_kb": (removable_from_wikidata * bytes_per_translation)
+            / 1024,
             "potential_savings_ioc_kb": (removable_from_ioc * bytes_per_translation) / 1024,
             "current_total_estimate_mb": (
                 (total_ioc_translations + total_wd_translations) * bytes_per_translation
-            ) / 1024 / 1024,
+            )
+            / 1024
+            / 1024,
         }
 
     def _generate_recommendations(
@@ -196,19 +199,23 @@ class TranslationOverlapAnalyzer:
 
         # IOC-only languages: Keep in IOC
         for lang in overlap_analysis["ioc_only_languages"]:
-            recommendations.append({
-                "language": lang,
-                "action": "keep_in_ioc",
-                "reason": "Unique to IOC",
-            })
+            recommendations.append(
+                {
+                    "language": lang,
+                    "action": "keep_in_ioc",
+                    "reason": "Unique to IOC",
+                }
+            )
 
         # Wikidata-only languages: Keep in Wikidata
         for lang in overlap_analysis["wikidata_only_languages"]:
-            recommendations.append({
-                "language": lang,
-                "action": "keep_in_wikidata",
-                "reason": "Unique to Wikidata",
-            })
+            recommendations.append(
+                {
+                    "language": lang,
+                    "action": "keep_in_wikidata",
+                    "reason": "Unique to Wikidata",
+                }
+            )
 
         # Shared languages: Decide based on coverage and identity
         for lang, details in overlap_analysis["language_details"].items():
@@ -219,37 +226,45 @@ class TranslationOverlapAnalyzer:
             if identical_pct > 90:
                 # >90% identical: keep only in database with more species
                 if ioc_count >= wd_count:
-                    recommendations.append({
-                        "language": lang,
-                        "action": "keep_in_ioc_only",
-                        "reason": f"{identical_pct:.1f}% identical, IOC has {ioc_count} vs WD {wd_count}",
-                        "remove_from": "wikidata",
-                        "savings": details["identical_translations"],
-                    })
+                    recommendations.append(
+                        {
+                            "language": lang,
+                            "action": "keep_in_ioc_only",
+                            "reason": f"{identical_pct:.1f}% identical, IOC has {ioc_count} vs WD {wd_count}",
+                            "remove_from": "wikidata",
+                            "savings": details["identical_translations"],
+                        }
+                    )
                 else:
-                    recommendations.append({
-                        "language": lang,
-                        "action": "keep_in_wikidata_only",
-                        "reason": f"{identical_pct:.1f}% identical, WD has {wd_count} vs IOC {ioc_count}",
-                        "remove_from": "ioc",
-                        "savings": details["identical_translations"],
-                    })
+                    recommendations.append(
+                        {
+                            "language": lang,
+                            "action": "keep_in_wikidata_only",
+                            "reason": f"{identical_pct:.1f}% identical, WD has {wd_count} vs IOC {ioc_count}",
+                            "remove_from": "ioc",
+                            "savings": details["identical_translations"],
+                        }
+                    )
             elif identical_pct > 50:
                 # 50-90% identical: keep both but remove exact duplicates
-                recommendations.append({
-                    "language": lang,
-                    "action": "keep_both_deduplicate",
-                    "reason": f"{identical_pct:.1f}% identical, keep unique translations in each",
-                    "remove_from": "wikidata" if ioc_count >= wd_count else "ioc",
-                    "savings": details["identical_translations"],
-                })
+                recommendations.append(
+                    {
+                        "language": lang,
+                        "action": "keep_both_deduplicate",
+                        "reason": f"{identical_pct:.1f}% identical, keep unique translations in each",
+                        "remove_from": "wikidata" if ioc_count >= wd_count else "ioc",
+                        "savings": details["identical_translations"],
+                    }
+                )
             else:
                 # <50% identical: keep both (different translation sources)
-                recommendations.append({
-                    "language": lang,
-                    "action": "keep_both",
-                    "reason": f"Only {identical_pct:.1f}% identical, different translations",
-                })
+                recommendations.append(
+                    {
+                        "language": lang,
+                        "action": "keep_both",
+                        "reason": f"Only {identical_pct:.1f}% identical, different translations",
+                    }
+                )
 
         return recommendations
 
@@ -274,13 +289,13 @@ def print_analysis_report(analysis: dict) -> None:
 
     if overlap["ioc_only_languages"]:
         print(f"  IOC-only: {', '.join(overlap['ioc_only_languages'][:20])}")
-        if len(overlap['ioc_only_languages']) > 20:
+        if len(overlap["ioc_only_languages"]) > 20:
             print(f"           ...and {len(overlap['ioc_only_languages']) - 20} more")
         print()
 
     if overlap["wikidata_only_languages"]:
         print(f"  Wikidata-only: {', '.join(overlap['wikidata_only_languages'][:20])}")
-        if len(overlap['wikidata_only_languages']) > 20:
+        if len(overlap["wikidata_only_languages"]) > 20:
             print(f"                ...and {len(overlap['wikidata_only_languages']) - 20} more")
         print()
 
@@ -289,13 +304,13 @@ def print_analysis_report(analysis: dict) -> None:
     print("SHARED LANGUAGE ANALYSIS")
     print("=" * 80)
     print()
-    print(f"{'Lang':>5} {'IOC':>8} {'WD':>8} {'Common':>8} {'Identical':>10} {'Different':>10} {'Match %':>9}")
+    print(
+        f"{'Lang':>5} {'IOC':>8} {'WD':>8} {'Common':>8} {'Identical':>10} {'Different':>10} {'Match %':>9}"
+    )
     print("-" * 80)
 
     for lang, details in sorted(
-        overlap["language_details"].items(),
-        key=lambda x: x[1]["identical_pct"],
-        reverse=True
+        overlap["language_details"].items(), key=lambda x: x[1]["identical_pct"], reverse=True
     ):
         ioc_count = details["ioc_count"]
         wd_count = details["wikidata_count"]
@@ -304,7 +319,9 @@ def print_analysis_report(analysis: dict) -> None:
         different = details["different_translations"]
         pct = details["identical_pct"]
 
-        print(f"{lang:>5} {ioc_count:>8,} {wd_count:>8,} {common:>8,} {identical:>10,} {different:>10,} {pct:>8.1f}%")
+        print(
+            f"{lang:>5} {ioc_count:>8,} {wd_count:>8,} {common:>8,} {identical:>10,} {different:>10,} {pct:>8.1f}%"
+        )
 
     # Size analysis
     print()
@@ -384,7 +401,9 @@ def print_analysis_report(analysis: dict) -> None:
 
     for lang, details in sorted(overlap["language_details"].items())[:5]:
         if details["different_examples"]:
-            print(f"\n{lang} (showing {len(details['different_examples'])} of {details['different_translations']} differences):")
+            print(
+                f"\n{lang} (showing {len(details['different_examples'])} of {details['different_translations']} differences):"
+            )
             for species, ioc_name, wd_name in details["different_examples"]:
                 print(f"  {species}:")
                 print(f"    IOC:      {ioc_name}")
@@ -406,6 +425,7 @@ def main():
 
     # Save to JSON
     import json
+
     output_path = Path("../data/translation_overlap_analysis.json")
     with open(output_path, "w") as f:
         json.dump(analysis, f, indent=2)

@@ -17,7 +17,13 @@ pub fn write_region_pack(
     create_schema(&mut conn)?;
 
     // Insert metadata
-    insert_metadata(&mut conn, config, grid_cells, total_checklists, total_observations)?;
+    insert_metadata(
+        &mut conn,
+        config,
+        grid_cells,
+        total_checklists,
+        total_observations,
+    )?;
 
     // Insert grid data
     insert_grid_data(&mut conn, grid_cells, config.h3_resolution)?;
@@ -104,9 +110,15 @@ fn insert_metadata(
             "date_range_start",
             &config.date_range.start.to_string()
         ])?;
-        stmt.execute(params!["date_range_end", &config.date_range.end.to_string()])?;
+        stmt.execute(params![
+            "date_range_end",
+            &config.date_range.end.to_string()
+        ])?;
         stmt.execute(params!["total_checklists", &total_checklists.to_string()])?;
-        stmt.execute(params!["total_observations", &total_observations.to_string()])?;
+        stmt.execute(params![
+            "total_observations",
+            &total_observations.to_string()
+        ])?;
         stmt.execute(params!["total_h3_cells", &grid_cells.len().to_string()])?;
         stmt.execute(params![
             "min_latitude",

@@ -26,7 +26,10 @@ mod tests {
         let record = sample_record();
         let date = record.parse_date();
         assert!(date.is_ok());
-        assert_eq!(date.unwrap(), NaiveDate::from_ymd_opt(2024, 10, 15).unwrap());
+        assert_eq!(
+            date.unwrap(),
+            NaiveDate::from_ymd_opt(2024, 10, 15).unwrap()
+        );
     }
 
     #[test]

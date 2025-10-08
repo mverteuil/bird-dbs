@@ -73,17 +73,19 @@ def main():
         # Generate coverage report
         report = builder.generate_coverage_report()
 
-        print(f"\n📊 Basic Statistics:")
+        print("\n📊 Basic Statistics:")
         print(f"  Species: {report['species_count']:,}")
         print(f"  Translations: {report['translation_count']:,}")
         print(f"  Languages: {report['language_count']}")
         print(f"  Avg translations/species: {report['avg_translations_per_species']}")
 
-        print(f"\n🌍 Top 20 Languages by Coverage:")
+        print("\n🌍 Top 20 Languages by Coverage:")
         for lang_code, lang_data in report["top_languages"]:
             name = lang_data["name"]
             count = lang_data["count"]
-            percentage = (count / report["species_count"] * 100) if report["species_count"] > 0 else 0
+            percentage = (
+                (count / report["species_count"] * 100) if report["species_count"] > 0 else 0
+            )
             print(f"  {lang_code:5s} {name:15s} {count:6,} ({percentage:5.1f}%)")
 
         # Save report to JSON

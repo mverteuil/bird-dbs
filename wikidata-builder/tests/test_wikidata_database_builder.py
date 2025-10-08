@@ -1,10 +1,12 @@
 """Tests for Wikidata database builder."""
 
-import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from wikidata_database_builder import WikidataDatabaseBuilder
@@ -86,15 +88,16 @@ class TestWikidataDatabaseBuilder:
 
     def test_init_creates_database(self, temp_db):
         """Test that initialization creates database file."""
-        builder = WikidataDatabaseBuilder(database_path=temp_db)
+        _ = WikidataDatabaseBuilder(database_path=temp_db)
         assert Path(temp_db).exists()
 
     def test_init_creates_tables(self, temp_db):
         """Test that initialization creates required tables."""
-        builder = WikidataDatabaseBuilder(database_path=temp_db)
+        _ = WikidataDatabaseBuilder(database_path=temp_db)
         engine = create_engine(f"sqlite:///{temp_db}")
 
         from sqlalchemy import inspect
+
         inspector = inspect(engine)
         tables = inspector.get_table_names()
 
@@ -140,15 +143,11 @@ class TestWikidataDatabaseBuilder:
             assert '"eu"' in query
 
     @patch("wikidata_database_builder.SPARQLWrapper")
-    def test_query_species_data(
-        self, mock_sparql, builder, sample_sparql_species_response
-    ):
+    def test_query_species_data(self, mock_sparql, builder, sample_sparql_species_response):
         """Test querying species data from Wikidata."""
         # Mock SPARQL response
         mock_wrapper = MagicMock()
-        mock_wrapper.query.return_value.convert.return_value = (
-            sample_sparql_species_response
-        )
+        mock_wrapper.query.return_value.convert.return_value = sample_sparql_species_response
         mock_sparql.return_value = mock_wrapper
 
         species_data = builder._query_species_data()
@@ -169,9 +168,7 @@ class TestWikidataDatabaseBuilder:
         """Test querying multilingual labels from Wikidata."""
         # Mock SPARQL response
         mock_wrapper = MagicMock()
-        mock_wrapper.query.return_value.convert.return_value = (
-            sample_sparql_labels_response
-        )
+        mock_wrapper.query.return_value.convert.return_value = sample_sparql_labels_response
         mock_sparql.return_value = mock_wrapper
 
         # Parse species data first
@@ -235,23 +232,17 @@ class TestWikidataDatabaseBuilder:
 
         # Filter translations
         filtered = [
-            t
-            for t in raw_translations
-            if t["common_name"] != species_names.get(t["wikidata_id"])
+            t for t in raw_translations if t["common_name"] != species_names.get(t["wikidata_id"])
         ]
 
         assert len(filtered) == 1
         assert filtered[0]["common_name"] == "Test Bird"
 
     @patch("wikidata_database_builder.SPARQLWrapper")
-    def test_insert_species(
-        self, mock_sparql, builder, sample_sparql_species_response
-    ):
+    def test_insert_species(self, mock_sparql, builder, sample_sparql_species_response):
         """Test inserting species into database."""
         mock_wrapper = MagicMock()
-        mock_wrapper.query.return_value.convert.return_value = (
-            sample_sparql_species_response
-        )
+        mock_wrapper.query.return_value.convert.return_value = sample_sparql_species_response
         mock_sparql.return_value = mock_wrapper
 
         species_data = builder._query_species_data()
@@ -288,9 +279,7 @@ class TestWikidataDatabaseBuilder:
         ]
 
         # Map to avibase_id
-        wikidata_to_avibase = {
-            sp["wikidata_id"]: sp["avibase_id"] for sp in species_data
-        }
+        wikidata_to_avibase = {sp["wikidata_id"]: sp["avibase_id"] for sp in species_data}
         translations_with_avibase = [
             {
                 "avibase_id": wikidata_to_avibase[t["wikidata_id"]],
@@ -324,9 +313,7 @@ class TestWikidataDatabaseBuilder:
         """Test handling of empty API responses."""
         with patch("wikidata_database_builder.SPARQLWrapper") as mock_sparql:
             mock_wrapper = MagicMock()
-            mock_wrapper.query.return_value.convert.return_value = {
-                "results": {"bindings": []}
-            }
+            mock_wrapper.query.return_value.convert.return_value = {"results": {"bindings": []}}
             mock_sparql.return_value = mock_wrapper
 
             species_data = builder._query_species_data()
@@ -490,7 +477,7 @@ class TestWikidataModels:
             )
             session.add(species2)
 
-            with pytest.raises(Exception):  # Should raise integrity error
+            with pytest.raises(IntegrityError):  # Should raise integrity error
                 session.commit()
 
 
@@ -566,25 +553,32 @@ class TestScientificNameFiltering:
 
     def test_filtering_percentage(self, builder):
         """Test realistic filtering percentage."""
-        species_data = [{"wikidata_id": f"Q{i}", "avibase_id": f"ABC{i}", "scientific_name": f"Species {i}"} for i in range(100)]
+        species_data = [
+            {"wikidata_id": f"Q{i}", "avibase_id": f"ABC{i}", "scientific_name": f"Species {i}"}
+            for i in range(100)
+        ]
 
         # Simulate 60% scientific name fallbacks
         labels = []
         for i in range(100):
             # 40% real translations
             if i < 40:
-                labels.append({
-                    "wikidata_id": f"Q{i}",
-                    "language_code": "es",
-                    "common_name": f"Especie {i}",
-                })
+                labels.append(
+                    {
+                        "wikidata_id": f"Q{i}",
+                        "language_code": "es",
+                        "common_name": f"Especie {i}",
+                    }
+                )
             # 60% scientific name fallbacks
             else:
-                labels.append({
-                    "wikidata_id": f"Q{i}",
-                    "language_code": "es",
-                    "common_name": f"Species {i}",
-                })
+                labels.append(
+                    {
+                        "wikidata_id": f"Q{i}",
+                        "language_code": "es",
+                        "common_name": f"Species {i}",
+                    }
+                )
 
         species_names = {sp["wikidata_id"]: sp["scientific_name"] for sp in species_data}
         filtered = [

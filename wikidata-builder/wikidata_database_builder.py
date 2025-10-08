@@ -272,7 +272,6 @@ class WikidataDatabaseBuilder:
             values_clause = " ".join([f"wd:{sp['wikidata_id']}" for sp in batch])
 
             # Query for labels in target languages
-            lang_clause = ",".join(self.TARGET_LANGUAGES)
             query = f"""
             SELECT ?species ?label (LANG(?label) AS ?lang)
             WHERE {{
@@ -391,7 +390,9 @@ class WikidataDatabaseBuilder:
         """
         with self.get_db() as session:
             metadata_entries = [
-                WikidataMetadata(key="wikidata_dump_date", value=datetime.utcnow().strftime("%Y-%m-%d")),
+                WikidataMetadata(
+                    key="wikidata_dump_date", value=datetime.utcnow().strftime("%Y-%m-%d")
+                ),
                 WikidataMetadata(key="created_at", value=datetime.utcnow().isoformat()),
                 WikidataMetadata(key="species_count", value=str(species_count)),
                 WikidataMetadata(key="translation_count", value=str(translation_count)),

@@ -15,16 +15,12 @@ class WikidataSpecies(SQLModel, table=True):
 
     __tablename__: str = "species"  # type: ignore[assignment]
 
-    wikidata_id: str = Field(
-        sa_column=Column(String(20), primary_key=True)
-    )  # e.g., "Q1234567"
+    wikidata_id: str = Field(sa_column=Column(String(20), primary_key=True))  # e.g., "Q1234567"
     scientific_name: str = Field(sa_column=Column(String(80)))  # e.g., "Passer domesticus"
     avibase_id_native: str | None = Field(
         default=None, sa_column=Column(String(20))
     )  # e.g., "240E33900CE34D44" (16-char)
-    taxon_rank: str | None = Field(
-        default=None, sa_column=Column(String(30))
-    )  # e.g., "species"
+    taxon_rank: str | None = Field(default=None, sa_column=Column(String(30)))  # e.g., "species"
     # Common name in English as reference
     english_name: str | None = Field(default=None, sa_column=Column(String(120)))
 

@@ -6,11 +6,10 @@ For complex species queries with fallback priorities, use SpeciesDatabaseService
 
 from pathlib import Path
 
-from sqlalchemy import create_engine, exists, func, select, text
-from sqlalchemy.orm import sessionmaker
-
 from birdnetpi.species.models import Species
 from birdnetpi.utils.ioc_models import IOCSpecies
+from sqlalchemy import create_engine, exists, func, select, text
+from sqlalchemy.orm import sessionmaker
 
 
 class IOCDatabaseService:

@@ -1,8 +1,9 @@
 """Shared test fixtures for Wikidata builder tests."""
 
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture(scope="session")

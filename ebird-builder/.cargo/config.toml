@@ -1,0 +1,4 @@
+[build]
+# Disable incremental compilation to avoid filesystem locking issues
+# on volumes that don't support file locking (e.g., network drives, backup volumes)
+incremental = false

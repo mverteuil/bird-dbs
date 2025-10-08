@@ -118,11 +118,7 @@ impl H3CellData {
 
         // Update date range
         let date = record.parse_date()?;
-        self.date_range_start = Some(
-            self.date_range_start
-                .map(|d| d.min(date))
-                .unwrap_or(date),
-        );
+        self.date_range_start = Some(self.date_range_start.map(|d| d.min(date)).unwrap_or(date));
         self.date_range_end = Some(self.date_range_end.map(|d| d.max(date)).unwrap_or(date));
 
         // Add to species accumulator
@@ -211,9 +207,9 @@ impl H3CellData {
             total_checklists: self.total_checklists.len(),
             complete_checklists: self.complete_checklists.len(),
             total_observations,
-            date_range_start: self.date_range_start.unwrap_or_else(|| {
-                NaiveDate::from_ymd_opt(2020, 1, 1).unwrap()
-            }),
+            date_range_start: self
+                .date_range_start
+                .unwrap_or_else(|| NaiveDate::from_ymd_opt(2020, 1, 1).unwrap()),
             date_range_end: self
                 .date_range_end
                 .unwrap_or_else(|| NaiveDate::from_ymd_opt(2025, 12, 31).unwrap()),

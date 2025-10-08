@@ -13,7 +13,6 @@ import sys
 from pathlib import Path
 
 import click
-
 from birdnetpi.utils.ioc_database_builder import IocDatabaseBuilder
 
 
