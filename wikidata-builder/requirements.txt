@@ -1,0 +1,21 @@
+# Wikidata Database Builder Requirements
+
+# Core dependencies
+pandas>=2.0.0
+sqlalchemy>=2.0.0
+requests>=2.31.0
+SPARQLWrapper>=2.0.0  # For querying Wikidata
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+
+# Type checking
+mypy>=1.5.0
+types-requests>=2.31.0
+
+# Code quality
+black>=23.7.0
+flake8>=6.1.0
+isort>=5.12.0

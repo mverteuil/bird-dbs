@@ -232,6 +232,49 @@ These files are then uploaded as **release assets** for BirdNET-Pi.
 
 ---
 
+## Testing
+
+All three builders include comprehensive test suites to ensure data quality and correctness.
+
+### Quick Start
+
+**IOC Builder:**
+```bash
+cd ioc-builder
+pip install -r requirements.txt
+pytest
+```
+
+**Wikidata Builder:**
+```bash
+cd wikidata-builder
+pip install -r requirements.txt
+pytest
+```
+
+**eBird Builder:**
+```bash
+cd ebird-builder
+cargo test
+```
+
+### Test Coverage
+
+- **IOC Builder:** >80% coverage - Excel parsing, Avibase mapping, database creation
+- **Wikidata Builder:** >85% coverage - SPARQL queries, scientific name filtering (critical)
+- **eBird Builder:** >75% coverage - H3 aggregation, species classification, filtering
+
+### Critical Tests
+
+1. **Scientific Name Fallback Filtering** (Wikidata) - Ensures 59% of useless fallback data is excluded
+2. **Avibase ID Mapping** (IOC + eBird) - Validates stable identifiers across taxonomic changes
+3. **H3 Grid Consistency** (eBird) - Ensures reproducible geographic indexing
+4. **Species Filtering** (eBird) - Validates approved, complete, native, species-only filters
+
+**See:** [docs/testing-guide.md](docs/testing-guide.md) for comprehensive testing documentation
+
+---
+
 ## Contributing
 
 ### Reporting Issues

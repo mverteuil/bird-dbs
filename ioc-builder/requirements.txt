@@ -1,0 +1,24 @@
+# IOC Database Builder Requirements
+
+# Core dependencies
+pandas>=2.0.0
+sqlalchemy>=2.0.0
+openpyxl>=3.1.0  # For reading Excel files
+requests>=2.31.0
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+
+# Type checking
+mypy>=1.5.0
+types-requests>=2.31.0
+
+# Code quality
+black>=23.7.0
+flake8>=6.1.0
+isort>=5.12.0
+
+# Note: R dependencies must be installed separately:
+# Rscript -e "install.packages(c('tidyverse', 'readxl'))"
