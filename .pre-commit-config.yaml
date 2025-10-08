@@ -29,13 +29,6 @@ repos:
       - id: ruff-format
         name: "ruff-format"
         exclude: ^build/
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v4.0.0-alpha.8
-    hooks:
-      - id: prettier
-        files: \.(css|html|js)$
-        exclude: >-
-          (\.min\.js|\.min\.css|templates/index_bootstrap\.html)
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
     hooks:
@@ -60,7 +53,15 @@ repos:
     rev: v1.1.406
     hooks:
       - id: pyright
-        exclude: ^(ioc-builder|wikidata-builder)/tests/
+        name: "pyright-ioc-builder"
+        files: ^ioc-builder/.*\.py$
+        exclude: ^ioc-builder/tests/
+        args: ['--project', 'ioc-builder']
+      - id: pyright
+        name: "pyright-wikidata-builder"
+        files: ^wikidata-builder/.*\.py$
+        exclude: ^wikidata-builder/tests/
+        args: ['--project', 'wikidata-builder']
   - repo: https://github.com/semgrep/semgrep
     rev: 'v1.136.0'
     hooks:
@@ -69,7 +70,7 @@ repos:
           - '--config=auto'
           - '--error'
         files: '^(ioc-builder|wikidata-builder)/.*\.py$'
-        language_version: python3.11
+        language_version: python3.12
         additional_dependencies: []
         verbose: false
   # Rust formatting and linting for eBird builder
@@ -87,3 +88,4 @@ repos:
           - '--'
           - '-D'
           - 'warnings'
+        entry: env CARGO_INCREMENTAL=0 cargo clippy

@@ -19,9 +19,9 @@ pub enum RegionType {
     State,
     County,
     #[serde(rename = "bcr")]
-    BCR,
+    Bcr,
     #[serde(rename = "iba")]
-    IBA,
+    Iba,
     Country,
     Metro,
 }

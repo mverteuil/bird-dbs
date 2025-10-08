@@ -32,6 +32,7 @@ pub struct SpeciesAccumulator {
 pub struct ObservationEvent {
     pub date: NaiveDate,
     pub checklist_id: String,
+    #[allow(dead_code)]
     pub count: u32,
 }
 
@@ -87,8 +88,8 @@ impl H3Aggregator {
 
     pub fn finalize(self, config: &FilterConfig) -> Vec<GridCellPack> {
         self.cells
-            .into_iter()
-            .map(|(_, cell)| cell.finalize(&self.grid, config))
+            .into_values()
+            .map(|cell| cell.finalize(&self.grid, config))
             .collect()
     }
 }

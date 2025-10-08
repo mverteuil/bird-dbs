@@ -1,13 +1,23 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+  "pytest>=7.4.0",
+  "pytest-cov>=4.1.0",
+  "pytest-mock>=3.11.0",
+  "mypy>=1.5.0",
+  "types-requests>=2.31.0",
+  "ruff>=0.1.0"
+]
 
 [project]
 name = "wikidata-reference-builder"
 version = "0.1.0"
 description = "Wikidata supplemental translations builder for BirdNET-Pi"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
   {name = "BirdNET-Pi Contributors"}
@@ -17,44 +27,26 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12"
 ]
 dependencies = [
   "pandas>=2.0.0",
   "sqlalchemy>=2.0.0",
   "requests>=2.31.0",
-  "SPARQLWrapper>=2.0.0"
-]
-
-[project.optional-dependencies]
-dev = [
-  "pytest>=7.4.0",
-  "pytest-cov>=4.1.0",
-  "pytest-mock>=3.11.0",
-  "mypy>=1.5.0",
-  "types-requests>=2.31.0",
-  "black>=23.7.0",
-  "ruff>=0.1.0",
-  "isort>=5.12.0"
+  "SPARQLWrapper>=2.0.0",
+  "sqlmodel>=0.0.24"
 ]
 
 [project.scripts]
 build-wikidata-reference = "wikidata_database_builder:main"
 run-wikidata-poc = "run_wikidata_poc:main"
 
-[tool.black]
-line-length = 100
-target-version = ["py38"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["."]
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*", "*/pytest-of-*"]
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -68,16 +60,35 @@ warn_unused_ignores = true
 module = ["SPARQLWrapper.*", "pandas.*"]
 ignore_missing_imports = true
 
+[tool.pyright]
+exclude = ["**/build", "**/__pycache__"]
+include = ["."]
+pythonVersion = "3.12"
+reportMissingTypeStubs = "none"
+reportUnknownArgumentType = "none"
+reportUnknownLambdaType = "none"
+reportUnknownMemberType = "none"
+reportUnknownParameterType = "none"
+reportUnknownVariableType = "none"
+reportUnnecessaryIsInstance = "none"
+typeCheckingMode = "standard"
+useLibraryCodeForTypes = true
+venv = ".venv"
+venvPath = "."
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+norecursedirs = ["docs", "*.egg-info", ".git", ".venv", "data"]
 addopts = [
   "-v",
   "--strict-markers",
   "--tb=short",
   "--cov=.",
+  "--cov-branch",
+  "--cov-config=pyproject.toml",
   "--cov-report=term-missing",
   "--cov-report=html",
   "--cov-report=xml"
@@ -90,7 +101,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py38"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = [
