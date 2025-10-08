@@ -21,20 +21,23 @@ This repository includes comprehensive test suites for all three database builde
 ```bash
 cd ioc-builder
 
-# Install dependencies (including test dependencies)
-pip install -r requirements.txt
+# Install dependencies using uv (including test dependencies)
+uv pip install -e ".[dev]"
+
+# Or sync entire environment
+uv sync --extra dev
 
 # Run all tests
-pytest
+uv run pytest
 
 # Run with coverage report
-pytest --cov=. --cov-report=html
+uv run pytest --cov=. --cov-report=html
 
 # Run specific test file
-pytest tests/test_ioc_database_builder.py
+uv run pytest tests/test_ioc_database_builder.py
 
 # Run specific test
-pytest tests/test_ioc_database_builder.py::TestIOCDatabaseBuilder::test_parse_species_data
+uv run pytest tests/test_ioc_database_builder.py::TestIOCDatabaseBuilder::test_parse_species_data
 ```
 
 ### Wikidata Builder Tests
@@ -42,17 +45,20 @@ pytest tests/test_ioc_database_builder.py::TestIOCDatabaseBuilder::test_parse_sp
 ```bash
 cd wikidata-builder
 
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies using uv
+uv pip install -e ".[dev]"
+
+# Or sync entire environment
+uv sync --extra dev
 
 # Run all tests (uses mocked API responses)
-pytest
+uv run pytest
 
 # Run only unit tests (exclude integration tests)
-pytest -m "not integration"
+uv run pytest -m "not integration"
 
 # Run with coverage
-pytest --cov=. --cov-report=html
+uv run pytest --cov=. --cov-report=html
 
 # View coverage report
 open htmlcov/index.html
@@ -313,7 +319,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          enable-cache: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install R
@@ -321,28 +332,33 @@ jobs:
       - name: Install dependencies
         run: |
           cd ioc-builder
-          pip install -r requirements.txt
+          uv sync --extra dev
       - name: Run tests
         run: |
           cd ioc-builder
-          pytest --cov=. --cov-report=xml
+          uv run pytest --cov=. --cov-report=xml
       - uses: codecov/codecov-action@v3
 
   test-wikidata:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          enable-cache: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install dependencies
         run: |
           cd wikidata-builder
-          pip install -r requirements.txt
+          uv sync --extra dev
       - name: Run tests
         run: |
           cd wikidata-builder
-          pytest -m "not integration" --cov=. --cov-report=xml
+          uv run pytest -m "not integration" --cov=. --cov-report=xml
       - uses: codecov/codecov-action@v3
 
   test-ebird:
@@ -368,15 +384,15 @@ jobs:
 
 **Solution:**
 ```bash
-# Install package in development mode
+# Install package in development mode using uv
 cd ioc-builder
-pip install -e .
+uv pip install -e ".[dev]"
 ```
 
 Or add parent directory to PYTHONPATH:
 ```bash
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-pytest
+uv run pytest
 ```
 
 ### Wikidata Tests Timeout

@@ -55,8 +55,9 @@ All databases use **Avibase IDs** as stable identifiers across taxonomic changes
 
 ### IOC Reference Builder
 - **Language:** Python 3.8+ with R
+- **Package Manager:** uv (recommended) or pip
 - **Dependencies:**
-  - Python: sqlalchemy, pandas, requests
+  - Python: sqlalchemy, pandas, requests, openpyxl
   - R: tidyverse, readxl
 - **Data Source:** IOC World Bird List (manual download)
   - Excel files: IOC_Names_File_Plus-XX.X.xlsx, IOC_Multiling_Names_File-XX.X.xlsx
@@ -66,7 +67,8 @@ All databases use **Avibase IDs** as stable identifiers across taxonomic changes
 
 ### Wikidata Reference Builder
 - **Language:** Python 3.8+
-- **Dependencies:** requests, SPARQLWrapper
+- **Package Manager:** uv (recommended) or pip
+- **Dependencies:** requests, SPARQLWrapper, pandas, sqlalchemy
 - **Data Source:** Wikidata SPARQL API (live queries)
 - **Hardware:** Any laptop with internet connection
 - **Time:** ~30-60 minutes (API rate limited)
@@ -115,12 +117,14 @@ mkdir -p shared/avilistr data/ioc data/ebird
 ```bash
 cd ioc-builder
 
-# Install dependencies
-pip install -r requirements.txt  # TODO: Create requirements.txt
+# Install dependencies using uv
+uv sync
+
+# Install R dependencies
 Rscript -e "install.packages(c('tidyverse', 'readxl'))"
 
 # Run builder
-python3 ioc_database_builder.py \
+uv run python ioc_database_builder.py \
   --ioc-path ../data/ioc/IOC_Names_File_Plus-14.2.xlsx \
   --multilingual-path ../data/ioc/IOC_Multiling_Names_File-14.2.xlsx \
   --avilistr-path ../shared/avilistr/world_birds_2025-10-08.csv \
@@ -134,11 +138,11 @@ python3 ioc_database_builder.py \
 ```bash
 cd wikidata-builder
 
-# Install dependencies
-pip install -r requirements.txt  # TODO: Create requirements.txt
+# Install dependencies using uv
+uv sync
 
 # Run builder (full extraction with 4 languages: nb, eu, zh-hans, zh-hant)
-python3 run_wikidata_poc.py \
+uv run python run_wikidata_poc.py \
   --full \
   --output ../output/wikidata_reference.db
 
@@ -241,15 +245,15 @@ All three builders include comprehensive test suites to ensure data quality and 
 **IOC Builder:**
 ```bash
 cd ioc-builder
-pip install -r requirements.txt
-pytest
+uv sync --extra dev
+uv run pytest
 ```
 
 **Wikidata Builder:**
 ```bash
 cd wikidata-builder
-pip install -r requirements.txt
-pytest
+uv sync --extra dev
+uv run pytest
 ```
 
 **eBird Builder:**
