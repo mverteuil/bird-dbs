@@ -1,0 +1,83 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+    -   id: check-yaml
+    -   id: end-of-file-fixer
+        name: "end-of-file-fixer"
+    -   id: trailing-whitespace
+        name: "trailing-whitespace"
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.13.0
+  hooks:
+      - id: ruff-check
+        name: "ruff-import-order"
+        args: [ "--select", "I", "--fix" ]
+        exclude: ^build/
+        stages: [pre-commit, pre-merge-commit, pre-push]
+      - id: ruff-check
+        name: "ruff-check"
+        args: [ "--fix" ]
+        exclude: ^build/
+        stages: [pre-commit, pre-merge-commit, pre-push]
+      - id: ruff-check
+        name: "ruff-check-no-fix"
+        args: [ ]
+        exclude: ^build/
+        stages: [manual]
+      - id: ruff-format
+        name: "ruff-format"
+        exclude: ^build/
+-   repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+    -   id: prettier
+        files: \.(css|html|js)$
+        exclude: (\.min\.js|\.min\.css|templates/index_bootstrap\.html)
+-   repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+    -   id: shellcheck
+-   repo: https://github.com/hadolint/hadolint
+    rev: v2.13.1
+    hooks:
+    -   id: hadolint
+-   repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.37.1
+    hooks:
+    -   id: yamllint
+-   repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+    -   id: actionlint
+-   repo: https://github.com/pappasam/toml-sort
+    rev: v0.24.3
+    hooks:
+    -   id: toml-sort-fix
+-   repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.406
+    hooks:
+    -   id: pyright
+        exclude: ^(ioc-builder|wikidata-builder)/tests/
+-   repo: https://github.com/semgrep/semgrep
+    rev: 'v1.136.0'
+    hooks:
+    -   id: semgrep
+        args: [
+          '--config=auto',
+          '--error'
+        ]
+        files: '^(ioc-builder|wikidata-builder)/.*\.py$'
+        language_version: python3.11
+        additional_dependencies: []
+        verbose: false
+# Rust formatting and linting for eBird builder
+-   repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+    -   id: fmt
+        name: "cargo-fmt"
+        args: ['--manifest-path', 'ebird-builder/Cargo.toml', '--']
+    -   id: clippy
+        name: "cargo-clippy"
+        args: ['--manifest-path', 'ebird-builder/Cargo.toml', '--', '-D', 'warnings']

@@ -292,9 +292,16 @@ cargo test
 
 1. Fork this repository
 2. Create a feature branch
-3. Make your changes
-4. Test with sample data (full datasets too large for CI)
-5. Submit PR with description of changes
+3. Set up pre-commit hooks: `pre-commit install`
+4. Make your changes
+5. Run tests: `uv run pytest` (Python) or `cargo test` (Rust)
+6. Run pre-commit checks: `pre-commit run --all-files`
+7. Submit PR with description of changes
+
+**Code Quality:**
+- Pre-commit hooks enforce code quality (ruff, cargo fmt, cargo clippy, etc.)
+- See [.pre-commit-hooks-config.md](.pre-commit-hooks-config.md) for setup and usage
+- All checks must pass before merging
 
 **Note:** CI tests only run with sample data. Full validation requires manual testing with actual IOC files / eBird EBD.
 
