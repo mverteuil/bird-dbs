@@ -2,14 +2,12 @@
 #[cfg(test)]
 mod tests {
     use super::super::aggregator::{
-        classify_species, compute_monthly_data, GridCellPack, H3Aggregator, H3CellData,
-        ObservationEvent, SpeciesAccumulator,
+        classify_species, compute_monthly_data, H3Aggregator, H3CellData, ObservationEvent,
     };
     use super::super::grid::H3Grid;
     use crate::config::FilterConfig;
     use crate::ebird::EBirdRecord;
     use chrono::NaiveDate;
-    use std::collections::{HashMap, HashSet};
 
     fn sample_record() -> EBirdRecord {
         EBirdRecord {
