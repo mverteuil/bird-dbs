@@ -73,6 +73,10 @@ repos:
         language_version: python3.12
         additional_dependencies: []
         verbose: false
+  - repo: https://github.com/boidolr/ast-grep-pre-commit
+    rev: 0.39.5
+    hooks:
+      - id: ast-grep
   # Rust formatting and linting for eBird builder
   - repo: https://github.com/doublify/pre-commit-rust
     rev: v1.0

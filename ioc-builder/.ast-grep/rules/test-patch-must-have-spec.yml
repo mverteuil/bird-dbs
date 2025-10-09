@@ -1,0 +1,96 @@
+id: test-patch-must-have-spec
+language: python
+severity: error
+message: MANDATORY - patch() calls MUST use spec, autospec, spec_set, new, or new_callable parameter
+
+note: |
+  ⛔ THIS IS NOT OPTIONAL - SPEC/REPLACEMENT PARAMETERS ARE REQUIRED ⛔
+
+  patch() calls without proper specs or replacements create unrealistic test
+  doubles that can accept ANY attribute/method call, completely defeating the
+  purpose of testing. This hides bugs, breaks refactoring safety, and wastes
+  development time.
+
+  ✅ RECOMMENDED SOLUTIONS (use one of these):
+
+  1. Use autospec=True - BEST for most cases:
+     @patch('module.func', autospec=True)
+     with patch('module.Class', autospec=True) as mock:
+     patch('module.method', autospec=True)
+
+  2. Use spec parameter with the actual class/function:
+     @patch('module.func', spec=original_func)
+     with patch('module.Class', spec=OriginalClass):
+
+  3. Use new_callable with spec-based mock:
+     @patch('module.func', new_callable=lambda: Mock(spec=SomeClass))
+     @patch('module.async_func', new_callable=AsyncMock)
+
+  4. Provide explicit replacement with new:
+     patch('module.constant', new=42)
+     patch('module.config', new={'key': 'value'})
+
+  5. Use spec_set for stricter attribute control:
+     @patch('module.Class', spec_set=OriginalClass)
+
+  ❌ FORBIDDEN PATTERNS (will be caught and rejected):
+    @patch('module.func')                    # No spec/replacement at all
+    with patch('module.Class'):              # No spec/replacement
+    patch('module.attr', spec=True)          # spec=True is meaningless
+    patch('module.attr', spec=False)         # spec=False is meaningless
+    patch('module.attr', spec=[])            # Empty list is useless
+    patch('module.attr', spec=())            # Empty tuple is useless
+    patch('module.attr', spec=["method"])    # List specs are wrong - use class
+    patch('module.attr', spec=("method",))   # Tuple specs are wrong - use class
+    patch('module.attr', spec=("a", "b"))    # Tuple specs are wrong - use class
+
+  DO NOT attempt to circumvent this rule. The requirement exists to prevent
+  bugs, not to make your life difficult. Do the work properly.
+
+rule:
+  any:
+    # Catch patch calls with no spec/replacement parameters
+    - all:
+        - pattern: patch($PATH)
+        - not:
+            any:
+              # Has new parameter
+              - pattern: patch($$, new=$N)
+              # Has new_callable parameter
+              - pattern: patch($$, new_callable=$NC)
+              # Has spec parameter
+              - pattern: patch($$, spec=$S)
+              # Has autospec parameter
+              - pattern: patch($$, autospec=$A)
+              # Has spec_set parameter
+              - pattern: patch($$, spec_set=$SS)
+
+    # Catch spec=True (meaningless)
+    - pattern: patch($$$, spec=True, $$$)
+    - pattern: patch($PATH, spec=True)
+
+    # Catch spec=False (meaningless)
+    - pattern: patch($$$, spec=False, $$$)
+    - pattern: patch($PATH, spec=False)
+
+    # Catch spec=[] (empty list - useless)
+    - pattern: patch($$$, spec=[], $$$)
+    - pattern: patch($PATH, spec=[])
+
+    # Catch spec=() (empty tuple - useless)
+    - pattern: patch($$$, spec=(), $$$)
+    - pattern: patch($PATH, spec=())
+
+    # Catch spec=[...] (list spec - should use class/object)
+    - pattern: patch($$$, spec=[$$$], $$$)
+    - pattern: patch($PATH, spec=[$$$])
+
+    # Catch spec=(...) (tuple spec - should use class/object)
+    # Single item with trailing comma: (item,)
+    - pattern: patch($$$, spec=($ITEM,), $$$)
+    - pattern: patch($PATH, spec=($ITEM,))
+    # Multiple items: (a, b) or (a, b, c, ...)
+    - pattern: patch($$$, spec=($$$, $$$), $$$)
+    - pattern: patch($PATH, spec=($$$, $$$))
+
+fix: patch($PATH, autospec=True)

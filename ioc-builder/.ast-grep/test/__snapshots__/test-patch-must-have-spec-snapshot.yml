@@ -1,0 +1,54 @@
+id: test-patch-must-have-spec
+snapshots:
+  ? |
+    @patch('module.Class')
+    def test_something():
+        pass
+  : fixed: |
+      @patch('module.Class', autospec=True)
+      def test_something():
+          pass
+    labels:
+    - source: patch('module.Class')
+      style: primary
+      start: 1
+      end: 22
+  ? |
+    @patch('module.service')
+    @patch('module.client', autospec=True)
+    def test_something():
+        pass
+  : fixed: |
+      @patch('module.service', autospec=True)
+      @patch('module.client', autospec=True)
+      def test_something():
+          pass
+    labels:
+    - source: patch('module.service')
+      style: primary
+      start: 1
+      end: 24
+  ? |
+    def test_something():
+        with patch('module.service'):
+            pass
+  : fixed: |
+      def test_something():
+          with patch('module.service', autospec=True):
+              pass
+    labels:
+    - source: patch('module.service')
+      style: primary
+      start: 31
+      end: 54
+  ? |
+    with patch('module.func'):
+        pass
+  : fixed: |
+      with patch('module.func', autospec=True):
+          pass
+    labels:
+    - source: patch('module.func')
+      style: primary
+      start: 5
+      end: 25
