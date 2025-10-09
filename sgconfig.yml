@@ -1,5 +1,5 @@
 ruleDirs:
-  - ioc-builder/.ast-grep/rules
+  - .ast-grep/rules
 
 testConfigs:
-  - testDir: ioc-builder/.ast-grep/test
+  - testDir: .ast-grep/test

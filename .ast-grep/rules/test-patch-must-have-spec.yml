@@ -1,7 +1,10 @@
+---
 id: test-patch-must-have-spec
 language: python
 severity: error
-message: MANDATORY - patch() calls MUST use spec, autospec, spec_set, new, or new_callable parameter
+message: |
+  MANDATORY - patch() calls MUST use spec, autospec, spec_set, new,
+  or new_callable parameter
 
 note: |
   ⛔ THIS IS NOT OPTIONAL - SPEC/REPLACEMENT PARAMETERS ARE REQUIRED ⛔

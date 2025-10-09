@@ -93,7 +93,7 @@ class TestIOCDatabaseBuilder:
         ],
     )
     def test_initialization(self, temp_db, check_type, expected_result):
-        """Test that initialization creates database and tables correctly."""
+        """Should create database and tables correctly."""
         _ = IOCDatabaseBuilder(db_path=temp_db)
 
         if check_type == "database_file":
@@ -109,7 +109,7 @@ class TestIOCDatabaseBuilder:
                 assert table_name in tables
 
     def test_parse_species_data(self, builder, sample_ioc_species_data):
-        """Test parsing IOC species data."""
+        """Should parse IOC species data."""
         species_list = builder._parse_species_data(sample_ioc_species_data)
 
         assert len(species_list) == 2
@@ -119,7 +119,7 @@ class TestIOCDatabaseBuilder:
         assert species_list[1]["english_name"] == "Somali Ostrich"
 
     def test_parse_multilingual_data(self, builder, sample_ioc_multilingual_data):
-        """Test parsing IOC multilingual translation data."""
+        """Should parse IOC multilingual translation data."""
         translations = builder._parse_multilingual_data(sample_ioc_multilingual_data)
 
         assert len(translations) == 4
@@ -135,7 +135,7 @@ class TestIOCDatabaseBuilder:
         assert any(t["common_name"] == "Autruche d'Afrique" for t in french)
 
     def test_map_avibase_ids(self, builder, sample_ioc_species_data, sample_avilistr_data):
-        """Test mapping Avibase IDs to IOC species."""
+        """Should map Avibase IDs to IOC species."""
         species_list = builder._parse_species_data(sample_ioc_species_data)
         mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
 
@@ -144,7 +144,7 @@ class TestIOCDatabaseBuilder:
         assert mapped[1]["avibase_id"] == "GHI789JKL012"
 
     def test_map_avibase_ids_missing_species(self, builder, sample_ioc_species_data):
-        """Test that species without Avibase IDs are excluded."""
+        """Should exclude species without Avibase IDs."""
         species_list = builder._parse_species_data(sample_ioc_species_data)
 
         # Empty Avilistr data
@@ -160,7 +160,7 @@ class TestIOCDatabaseBuilder:
         assert len(mapped) == 0
 
     def test_insert_species(self, builder, sample_ioc_species_data, sample_avilistr_data):
-        """Test inserting species into database."""
+        """Should insert species into database."""
         species_list = builder._parse_species_data(sample_ioc_species_data)
         mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
 
@@ -182,7 +182,7 @@ class TestIOCDatabaseBuilder:
         sample_ioc_multilingual_data,
         sample_avilistr_data,
     ):
-        """Test inserting translations into database."""
+        """Should insert translations into database."""
         # First insert species
         species_list = builder._parse_species_data(sample_ioc_species_data)
         mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
@@ -206,7 +206,7 @@ class TestIOCDatabaseBuilder:
     def test_duplicate_species_handling(
         self, builder, sample_ioc_species_data, sample_avilistr_data
     ):
-        """Test that duplicate species are handled correctly."""
+        """Should handle duplicate species correctly."""
         species_list = builder._parse_species_data(sample_ioc_species_data)
         mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
 
@@ -221,7 +221,7 @@ class TestIOCDatabaseBuilder:
             assert len(species) == 2
 
     def test_language_code_normalization(self, builder):
-        """Test that language codes are normalized to lowercase."""
+        """Should normalize language codes to lowercase."""
         data = pd.DataFrame(
             {
                 "Scientific name": ["Struthio camelus"],
@@ -234,7 +234,7 @@ class TestIOCDatabaseBuilder:
         assert translations[0]["language_code"] == "es"  # Should be lowercase
 
     def test_empty_translation_filtering(self, builder):
-        """Test that empty translations are filtered out."""
+        """Should filter out empty translations."""
         data = pd.DataFrame(
             {
                 "Scientific name": ["Struthio camelus", "Struthio molybdophanes"],
@@ -248,7 +248,7 @@ class TestIOCDatabaseBuilder:
         assert translations[0]["common_name"] == "Avestruz"
 
     def test_scientific_name_matching_case_insensitive(self, builder, sample_avilistr_data):
-        """Test that scientific name matching is case-insensitive."""
+        """Should match scientific names case-insensitively."""
         species_data = pd.DataFrame(
             {
                 "Order": ["STRUTHIONIFORMES"],
@@ -288,7 +288,7 @@ class TestIOCDatabaseBuilder:
         expected_value,
         needs_translations,
     ):
-        """Test validation of database statistics."""
+        """Should validate database statistics."""
         # Always insert species
         species_list = builder._parse_species_data(sample_ioc_species_data)
         mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
@@ -307,7 +307,7 @@ class TestIOCModels:
     """Tests for IOC database models."""
 
     def test_species_model_required_fields(self, temp_db):
-        """Test that Species model has required fields."""
+        """Should verify Species model has required fields."""
         engine = create_engine(f"sqlite:///{temp_db}")
         SQLModel.metadata.create_all(engine)
 
@@ -332,7 +332,7 @@ class TestIOCModels:
             assert retrieved.english_name == "Test Species"
 
     def test_translation_model_required_fields(self, temp_db):
-        """Test that Translation model has required fields."""
+        """Should verify Translation model has required fields."""
         engine = create_engine(f"sqlite:///{temp_db}")
         SQLModel.metadata.create_all(engine)
 
@@ -367,7 +367,7 @@ class TestIOCModels:
             assert retrieved.common_name == "Especie de Prueba"
 
     def test_species_unique_constraint(self, temp_db):
-        """Test that avibase_id is unique in Species table."""
+        """Should ensure avibase_id is unique in Species table."""
         engine = create_engine(f"sqlite:///{temp_db}")
         SQLModel.metadata.create_all(engine)
 
@@ -419,7 +419,7 @@ class TestIOCDatabaseBuilderIntegration:
         return Path(__file__).parent / "fixtures" / "sample_avilistr.csv"
 
     def test_populate_from_xml_only(self, temp_db, sample_xml_file, sample_avilistr_file):
-        """Test populating database from XML file only."""
+        """Should populate database from XML file only."""
         builder = IOCDatabaseBuilder(db_path=temp_db)
         builder.populate_from_files(xml_file=sample_xml_file, avilistr_csv=sample_avilistr_file)
 
@@ -444,7 +444,7 @@ class TestIOCDatabaseBuilderIntegration:
     def test_populate_from_xml_and_xlsx(
         self, temp_db, sample_xml_file, sample_xlsx_file, sample_avilistr_file
     ):
-        """Test populating database from both XML and XLSX files."""
+        """Should populate database from both XML and XLSX files."""
         builder = IOCDatabaseBuilder(db_path=temp_db)
         builder.populate_from_files(
             xml_file=sample_xml_file,
@@ -476,7 +476,7 @@ class TestIOCDatabaseBuilderIntegration:
             assert any(t.common_name == "Afrikanischer Strauß" for t in german)
 
     def test_populate_metadata(self, temp_db, sample_xml_file, sample_avilistr_file):
-        """Test that metadata is populated correctly."""
+        """Should populate metadata correctly."""
         builder = IOCDatabaseBuilder(db_path=temp_db)
         builder.populate_from_files(xml_file=sample_xml_file, avilistr_csv=sample_avilistr_file)
 
@@ -496,7 +496,7 @@ class TestIOCDatabaseBuilderIntegration:
             assert species_count == "3"
 
     def test_populate_creates_indexes(self, temp_db, sample_xml_file, sample_avilistr_file):
-        """Test that performance indexes are created."""
+        """Should create performance indexes."""
         builder = IOCDatabaseBuilder(db_path=temp_db)
         builder.populate_from_files(xml_file=sample_xml_file, avilistr_csv=sample_avilistr_file)
 

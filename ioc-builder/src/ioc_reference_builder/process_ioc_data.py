@@ -136,7 +136,7 @@ def download(version: str, output_dir: Path) -> None:
         "ioc_names_plus_red.xlsx": f"{base_url}/IOC_Names_File_Plus-{version}_red.xlsx",
         "ioc_names_plus.xlsx": f"{base_url}/IOC_Names_File_Plus-{version}.xlsx",
         "multilingual.xlsx": f"{base_url}/Multiling%20IOC%20{version}_c.xlsx",
-        "master_xml.xml": f"http://www.worldbirdnames.org/master_ioc-names_xml.{version}.xml",
+        "master_xml.xml": f"{base_url}/master_ioc-names_xml.{version}.xml",
     }
 
     downloaded_files = []

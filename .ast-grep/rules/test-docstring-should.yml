@@ -1,3 +1,4 @@
+---
 id: pytest-docstring-should-prefix
 language: python
 severity: error

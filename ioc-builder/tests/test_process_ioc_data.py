@@ -22,24 +22,25 @@ class TestDownloadCommand:
     @pytest.fixture
     def mock_successful_response(self):
         """Create a mock successful HTTP response."""
-        response = MagicMock()
+        response = MagicMock(spec=requests.Response)
         response.status_code = 200
         response.content = b"test file content"
-        response.raise_for_status = MagicMock()
+        response.raise_for_status = MagicMock(spec=callable)
         return response
 
     @pytest.fixture
     def mock_failed_response(self):
         """Create a mock failed HTTP response."""
-        response = MagicMock()
+        response = MagicMock(spec=requests.Response)
         response.status_code = 404
         response.raise_for_status = MagicMock(
-            side_effect=requests.exceptions.HTTPError("404 Not Found")
+            spec=callable,
+            side_effect=requests.exceptions.HTTPError("404 Not Found"),
         )
         return response
 
     def test_download_success(self, runner, mocker, mock_successful_response):
-        """Test successful download of all files."""
+        """Should successfully download all files."""
         # Mock requests.get to return successful response
         mock_get = mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
@@ -64,7 +65,7 @@ class TestDownloadCommand:
             assert (output_dir / "master_xml.xml").exists()
 
     def test_download_with_custom_version(self, runner, mocker, mock_successful_response):
-        """Test download with custom version number."""
+        """Should download with custom version number."""
         mock_get = mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
             return_value=mock_successful_response,
@@ -80,7 +81,7 @@ class TestDownloadCommand:
             assert any("14.2" in str(call) for call in calls)
 
     def test_download_creates_output_directory(self, runner, mocker, mock_successful_response):
-        """Test that download creates output directory if it doesn't exist."""
+        """Should create output directory if it doesn't exist."""
         mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
             return_value=mock_successful_response,
@@ -98,25 +99,26 @@ class TestDownloadCommand:
             assert output_dir.is_dir()
 
     def test_download_partial_failure(self, runner, mocker):
-        """Test download when some files fail."""
+        """Should handle download when some files fail."""
 
         def mock_get_side_effect(url, timeout=None):
             if "red" in url:
                 # Fail for red file
-                response = MagicMock()
+                response = MagicMock(spec=requests.Response)
                 response.raise_for_status = MagicMock(
-                    side_effect=requests.exceptions.HTTPError("404 Not Found")
+                    spec=callable,
+                    side_effect=requests.exceptions.HTTPError("404 Not Found"),
                 )
                 return response
             else:
                 # Succeed for other files
-                response = MagicMock()
+                response = MagicMock(spec=requests.Response)
                 response.status_code = 200
                 response.content = b"test content"
-                response.raise_for_status = MagicMock()
+                response.raise_for_status = MagicMock(spec=callable)
                 return response
 
-        mock_get = mocker.patch(
+        mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
             side_effect=mock_get_side_effect,
         )
@@ -133,7 +135,7 @@ class TestDownloadCommand:
             assert "Failed downloads:" in result.output
 
     def test_download_all_files_fail(self, runner, mocker, mock_failed_response):
-        """Test download when all files fail."""
+        """Should handle download when all files fail."""
         mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
             return_value=mock_failed_response,
@@ -150,7 +152,7 @@ class TestDownloadCommand:
             assert "Downloaded: 0/4 files" in result.output
 
     def test_download_urls_format(self, runner, mocker, mock_successful_response):
-        """Test that URLs are formatted correctly."""
+        """Should format URLs correctly."""
         mock_get = mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
             return_value=mock_successful_response,
@@ -166,10 +168,10 @@ class TestDownloadCommand:
             assert "https://www.worldbirdnames.org/IOC_Names_File_Plus-15.1_red.xlsx" in called_urls
             assert "https://www.worldbirdnames.org/IOC_Names_File_Plus-15.1.xlsx" in called_urls
             assert "https://www.worldbirdnames.org/Multiling%20IOC%2015.1_c.xlsx" in called_urls
-            assert "http://www.worldbirdnames.org/master_ioc-names_xml.15.1.xml" in called_urls
+            assert "https://www.worldbirdnames.org/master_ioc-names_xml.15.1.xml" in called_urls
 
     def test_download_default_output_directory(self, runner, mocker, mock_successful_response):
-        """Test that default output directory is used when not specified."""
+        """Should use default output directory when not specified."""
         mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
             return_value=mock_successful_response,
@@ -191,12 +193,12 @@ class TestDownloadCommand:
         assert "data/ioc" in result.output
 
     def test_download_file_size_reporting(self, runner, mocker, mock_successful_response):
-        """Test that file sizes are reported correctly."""
+        """Should report file sizes correctly."""
         # Create response with known size (1 MB)
-        response = MagicMock()
+        response = MagicMock(spec=requests.Response)
         response.status_code = 200
         response.content = b"x" * (1024 * 1024)  # 1 MB
-        response.raise_for_status = MagicMock()
+        response.raise_for_status = MagicMock(spec=callable)
 
         mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
