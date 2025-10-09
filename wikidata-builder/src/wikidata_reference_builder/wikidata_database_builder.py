@@ -392,7 +392,7 @@ class WikidataDatabaseBuilder:
             self._restore_normal_pragmas(session)
 
     def _insert_translations(self, translation_data: list[dict[str, str]]) -> None:
-        """Insert translation data in batches.
+        """Insert translation data in batches, handling duplicates.
 
         Args:
             translation_data: List of translation dicts
@@ -403,7 +403,17 @@ class WikidataDatabaseBuilder:
             batch_size = 1000
             for i in range(0, len(translation_data), batch_size):
                 batch = translation_data[i : i + batch_size]
-                session.bulk_insert_mappings(WikidataTranslation, batch)
+
+                # Use INSERT OR IGNORE to skip duplicates (keeps first occurrence)
+                for trans in batch:
+                    session.execute(
+                        text("""
+                            INSERT OR IGNORE INTO translations (avibase_id, language_code, common_name)
+                            VALUES (:avibase_id, :language_code, :common_name)
+                        """),
+                        trans,
+                    )
+
                 session.commit()
                 if (i + batch_size) % 10000 == 0:
                     print(f"  Inserted {i + batch_size} translations...")

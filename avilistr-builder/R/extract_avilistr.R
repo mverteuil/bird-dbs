@@ -144,15 +144,20 @@ validate_mapping <- function(csv_path, min_species = 10000) {
 
   data <- readr::read_csv(csv_path, show_col_types = FALSE)
 
+  # Check for required columns
+  has_avibase_id <- "AvibaseID" %in% names(data)
+  has_scientific_name <- "Scientific_name" %in% names(data)
+  has_bow_url <- "Birds_of_the_World_URL" %in% names(data)
+
   # Validation checks
   checks <- list(
     file_exists = TRUE,
     row_count = nrow(data),
-    has_avibase_id = "AvibaseID" %in% names(data),
-    has_scientific_name = "Scientific_name" %in% names(data),
-    has_bow_url = "Birds_of_the_World_URL" %in% names(data),
-    missing_avibase = sum(is.na(data$AvibaseID)),
-    unique_avibase = length(unique(data$AvibaseID)),
+    has_avibase_id = has_avibase_id,
+    has_scientific_name = has_scientific_name,
+    has_bow_url = has_bow_url,
+    missing_avibase = if (has_avibase_id) sum(is.na(data$AvibaseID)) else NA,
+    unique_avibase = if (has_avibase_id) length(unique(data$AvibaseID)) else 0,
     meets_minimum = nrow(data) >= min_species
   )
 

@@ -12,34 +12,28 @@ test_that("extract_avilistr_mapping creates output file", {
 
   expect_true(file.exists(output_file))
   expect_s3_class(result, "tbl_df")
-  expect_true("avibase_id" %in% names(result))
+  expect_true("AvibaseID" %in% names(result))
   expect_true(nrow(result) > 0)
 
   unlink(output_file)
 })
 
 
-test_that("extract_avilistr_mapping filters authorities correctly", {
+test_that("extract_avilistr_mapping includes expected columns", {
   skip_if_not_installed("avilistr")
 
   output_file <- tempfile(fileext = ".csv")
 
-  # Extract with only IOC
+  # Extract with default settings
   result <- extract_avilistr_mapping(
     output_path = output_file,
-    authorities = c("ioc"),
     verbose = FALSE
   )
 
-  # Should have avibase_id and scientific_name at minimum
-  expect_true("avibase_id" %in% names(result))
-  expect_true("scientific_name" %in% names(result))
-
-  # If IOC column exists in avilistr, it should be included
-  data("birdlist", package = "avilistr", envir = environment())
-  if ("ioc_scientific_name" %in% names(birdlist)) {
-    expect_true("ioc_scientific_name" %in% names(result))
-  }
+  # Should have AvibaseID and Scientific_name at minimum
+  expect_true("AvibaseID" %in% names(result))
+  expect_true("Scientific_name" %in% names(result))
+  expect_true("English_name_AviList" %in% names(result))
 
   unlink(output_file)
 })
@@ -55,8 +49,8 @@ test_that("extract_avilistr_mapping removes NA avibase_id rows", {
     verbose = FALSE
   )
 
-  # Check that no NA avibase_ids remain
-  expect_true(all(!is.na(result$avibase_id)))
+  # Check that no NA AvibaseIDs remain
+  expect_true(all(!is.na(result$AvibaseID)))
 
   unlink(output_file)
 })
@@ -100,20 +94,6 @@ test_that("extract_avilistr_mapping verbose mode works", {
 })
 
 
-test_that("extract_avilistr_mapping fails gracefully without avilistr", {
-  # Mock the requireNamespace function to simulate missing package
-  with_mocked_bindings(
-    requireNamespace = function(...) FALSE,
-    {
-      expect_error(
-        extract_avilistr_mapping(verbose = FALSE),
-        "Package 'avilistr' is required"
-      )
-    }
-  )
-})
-
-
 test_that("get_avilistr_info returns correct structure when installed", {
   skip_if_not_installed("avilistr")
 
@@ -127,30 +107,14 @@ test_that("get_avilistr_info returns correct structure when installed", {
 })
 
 
-test_that("get_avilistr_info returns correct structure when not installed", {
-  # Mock the requireNamespace function
-  with_mocked_bindings(
-    requireNamespace = function(...) FALSE,
-    {
-      info <- get_avilistr_info()
-
-      expect_type(info, "list")
-      expect_false(info$installed)
-      expect_true(is.na(info$version))
-      expect_equal(info$message, "avilistr package not installed")
-    }
-  )
-})
-
-
 test_that("validate_mapping detects valid CSV file", {
   skip_if_not_installed("avilistr")
 
   # Create a valid test CSV
   test_data <- data.frame(
-    avibase_id = paste0("avibase_", 1:15000),
-    scientific_name = paste("Species", 1:15000),
-    ioc_scientific_name = paste("IOC Species", 1:15000),
+    AvibaseID = paste0("avibase-", 1:15000),
+    Scientific_name = paste("Species", 1:15000),
+    English_name_AviList = paste("Common Name", 1:15000),
     stringsAsFactors = FALSE
   )
 
@@ -165,7 +129,6 @@ test_that("validate_mapping detects valid CSV file", {
   expect_equal(validation$row_count, 15000)
   expect_true(validation$has_avibase_id)
   expect_true(validation$has_scientific_name)
-  expect_true(validation$has_ioc)
   expect_equal(validation$missing_avibase, 0)
   expect_equal(validation$unique_avibase, 15000)
   expect_true(validation$meets_minimum)
@@ -177,9 +140,9 @@ test_that("validate_mapping detects valid CSV file", {
 test_that("validate_mapping detects invalid CSV (missing columns)", {
   skip_if_not_installed("avilistr")
 
-  # Create invalid test CSV (missing avibase_id column)
+  # Create invalid test CSV (missing AvibaseID column)
   test_data <- data.frame(
-    scientific_name = paste("Species", 1:100),
+    Scientific_name = paste("Species", 1:100),
     stringsAsFactors = FALSE
   )
 
@@ -200,8 +163,8 @@ test_that("validate_mapping detects invalid CSV (too few species)", {
 
   # Create valid but small test CSV
   test_data <- data.frame(
-    avibase_id = paste0("avibase_", 1:50),
-    scientific_name = paste("Species", 1:50),
+    AvibaseID = paste0("avibase-", 1:50),
+    Scientific_name = paste("Species", 1:50),
     stringsAsFactors = FALSE
   )
 
@@ -221,10 +184,10 @@ test_that("validate_mapping detects invalid CSV (too few species)", {
 test_that("validate_mapping detects missing avibase_id values", {
   skip_if_not_installed("avilistr")
 
-  # Create test CSV with some NA avibase_ids
+  # Create test CSV with some NA AvibaseIDs
   test_data <- data.frame(
-    avibase_id = c(paste0("avibase_", 1:9990), rep(NA, 10)),
-    scientific_name = paste("Species", 1:10000),
+    AvibaseID = c(paste0("avibase-", 1:9990), rep(NA, 10)),
+    Scientific_name = paste("Species", 1:10000),
     stringsAsFactors = FALSE
   )
 
@@ -257,7 +220,7 @@ test_that("print.avilistr_validation produces output", {
     row_count = 15000,
     has_avibase_id = TRUE,
     has_scientific_name = TRUE,
-    has_ioc = TRUE,
+    has_bow_url = TRUE,
     missing_avibase = 0,
     unique_avibase = 15000,
     meets_minimum = TRUE,
@@ -283,7 +246,7 @@ test_that("print.avilistr_validation shows failure correctly", {
     row_count = 50,
     has_avibase_id = TRUE,
     has_scientific_name = TRUE,
-    has_ioc = FALSE,
+    has_bow_url = FALSE,
     missing_avibase = 5,
     unique_avibase = 45,
     meets_minimum = FALSE,

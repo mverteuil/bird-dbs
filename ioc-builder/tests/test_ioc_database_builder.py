@@ -1,6 +1,5 @@
 """Tests for IOC database builder."""
 
-import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -15,65 +14,6 @@ from ioc_reference_builder.ioc_models import (
     IOCSpecies,
     IOCTranslation,
 )
-
-
-@pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-    yield db_path
-    Path(db_path).unlink(missing_ok=True)
-
-
-@pytest.fixture
-def sample_ioc_species_data():
-    """Sample IOC species data."""
-    return pd.DataFrame(
-        {
-            "Order": ["STRUTHIONIFORMES", "STRUTHIONIFORMES"],
-            "Family": ["Struthionidae", "Struthionidae"],
-            "Genus": ["Struthio", "Struthio"],
-            "Species": ["camelus", "molybdophanes"],
-            "English name": ["Common Ostrich", "Somali Ostrich"],
-            "Authority": ["Linnaeus, 1758", "Reichenow, 1883"],
-        }
-    )
-
-
-@pytest.fixture
-def sample_ioc_multilingual_data():
-    """Sample IOC multilingual translation data."""
-    return pd.DataFrame(
-        {
-            "Scientific name": [
-                "Struthio camelus",
-                "Struthio camelus",
-                "Struthio molybdophanes",
-                "Struthio molybdophanes",
-            ],
-            "LanguageCode": ["es", "fr", "es", "fr"],
-            "CommonName": [
-                "Avestruz Común",
-                "Autruche d'Afrique",
-                "Avestruz Somalí",
-                "Autruche de Somalie",
-            ],
-        }
-    )
-
-
-@pytest.fixture
-def sample_avilistr_data():
-    """Sample Avilistr data with Avibase ID mappings."""
-    return pd.DataFrame(
-        {
-            "scientific_name": ["Struthio camelus", "Struthio molybdophanes"],
-            "avibase_id": ["ABC123DEF456", "GHI789JKL012"],
-            "ioc_scientific_name": ["Struthio camelus", "Struthio molybdophanes"],
-            "clements_scientific_name": ["Struthio camelus", "Struthio molybdophanes"],
-        }
-    )
 
 
 @pytest.fixture

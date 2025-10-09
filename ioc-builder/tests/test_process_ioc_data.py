@@ -2,7 +2,6 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -19,32 +18,12 @@ class TestDownloadCommand:
         """Create CLI test runner."""
         return CliRunner()
 
-    @pytest.fixture
-    def mock_successful_response(self):
-        """Create a mock successful HTTP response."""
-        response = MagicMock(spec=requests.Response)
-        response.status_code = 200
-        response.content = b"test file content"
-        response.raise_for_status = MagicMock(spec=callable)
-        return response
-
-    @pytest.fixture
-    def mock_failed_response(self):
-        """Create a mock failed HTTP response."""
-        response = MagicMock(spec=requests.Response)
-        response.status_code = 404
-        response.raise_for_status = MagicMock(
-            spec=callable,
-            side_effect=requests.exceptions.HTTPError("404 Not Found"),
-        )
-        return response
-
-    def test_download_success(self, runner, mocker, mock_successful_response):
+    def test_download_success(self, runner, mocker, http_response_factory):
         """Should successfully download all files."""
         # Mock requests.get to return successful response
         mock_get = mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
-            return_value=mock_successful_response,
+            return_value=http_response_factory(content=b"test file content"),
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -64,11 +43,11 @@ class TestDownloadCommand:
             assert (output_dir / "multilingual.xlsx").exists()
             assert (output_dir / "master_xml.xml").exists()
 
-    def test_download_with_custom_version(self, runner, mocker, mock_successful_response):
+    def test_download_with_custom_version(self, runner, mocker, http_response_factory):
         """Should download with custom version number."""
         mock_get = mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
-            return_value=mock_successful_response,
+            return_value=http_response_factory(),
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -80,11 +59,11 @@ class TestDownloadCommand:
             calls = mock_get.call_args_list
             assert any("14.2" in str(call) for call in calls)
 
-    def test_download_creates_output_directory(self, runner, mocker, mock_successful_response):
+    def test_download_creates_output_directory(self, runner, mocker, http_response_factory):
         """Should create output directory if it doesn't exist."""
         mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
-            return_value=mock_successful_response,
+            return_value=http_response_factory(),
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -98,25 +77,18 @@ class TestDownloadCommand:
             assert output_dir.exists()
             assert output_dir.is_dir()
 
-    def test_download_partial_failure(self, runner, mocker):
+    def test_download_partial_failure(self, runner, mocker, http_response_factory):
         """Should handle download when some files fail."""
 
         def mock_get_side_effect(url, headers=None, timeout=None):
             if "red" in url:
                 # Fail for red file
-                response = MagicMock(spec=requests.Response)
-                response.raise_for_status = MagicMock(
-                    spec=callable,
-                    side_effect=requests.exceptions.HTTPError("404 Not Found"),
+                return http_response_factory(
+                    raise_for_status_error=requests.exceptions.HTTPError("404 Not Found")
                 )
-                return response
             else:
                 # Succeed for other files
-                response = MagicMock(spec=requests.Response)
-                response.status_code = 200
-                response.content = b"test content"
-                response.raise_for_status = MagicMock(spec=callable)
-                return response
+                return http_response_factory(content=b"test content")
 
         mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
@@ -134,11 +106,14 @@ class TestDownloadCommand:
             assert "✗ Failed to download" in result.output
             assert "Failed downloads:" in result.output
 
-    def test_download_all_files_fail(self, runner, mocker, mock_failed_response):
+    def test_download_all_files_fail(self, runner, mocker, http_response_factory):
         """Should handle download when all files fail."""
         mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
-            return_value=mock_failed_response,
+            return_value=http_response_factory(
+                status_code=404,
+                raise_for_status_error=requests.exceptions.HTTPError("404 Not Found"),
+            ),
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -151,11 +126,11 @@ class TestDownloadCommand:
             assert "✗ Failed to download" in result.output
             assert "Downloaded: 0/4 files" in result.output
 
-    def test_download_urls_format(self, runner, mocker, mock_successful_response):
+    def test_download_urls_format(self, runner, mocker, http_response_factory):
         """Should format URLs correctly."""
         mock_get = mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
-            return_value=mock_successful_response,
+            return_value=http_response_factory(),
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -170,11 +145,11 @@ class TestDownloadCommand:
             assert "https://www.worldbirdnames.org/Multiling%20IOC%2015.1_c.xlsx" in called_urls
             assert "https://www.worldbirdnames.org/master_ioc-names_xml.15.1.xml" in called_urls
 
-    def test_download_default_output_directory(self, runner, mocker, mock_successful_response):
+    def test_download_default_output_directory(self, runner, mocker, http_response_factory):
         """Should use default output directory when not specified."""
         mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
-            return_value=mock_successful_response,
+            return_value=http_response_factory(),
         )
 
         # Create a mock mkdir to capture the path
@@ -192,17 +167,11 @@ class TestDownloadCommand:
         # Check default directory was mentioned
         assert "data/ioc" in result.output
 
-    def test_download_file_size_reporting(self, runner, mocker, mock_successful_response):
+    def test_download_file_size_reporting(self, runner, mocker, http_response_factory):
         """Should report file sizes correctly."""
-        # Create response with known size (1 MB)
-        response = MagicMock(spec=requests.Response)
-        response.status_code = 200
-        response.content = b"x" * (1024 * 1024)  # 1 MB
-        response.raise_for_status = MagicMock(spec=callable)
-
         mocker.patch(
             "ioc_reference_builder.process_ioc_data.requests.get",
-            return_value=response,
+            return_value=http_response_factory(content=b"x" * (1024 * 1024)),  # 1 MB
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:

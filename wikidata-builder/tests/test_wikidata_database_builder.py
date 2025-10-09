@@ -1,6 +1,5 @@
 """Tests for Wikidata database builder."""
 
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -20,73 +19,9 @@ from wikidata_reference_builder.wikidata_models import (
 
 
 @pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-    yield db_path
-    Path(db_path).unlink(missing_ok=True)
-
-
-@pytest.fixture
 def builder(temp_db):
     """Create Wikidata database builder instance."""
     return WikidataDatabaseBuilder(db_path=temp_db)
-
-
-@pytest.fixture
-def sample_sparql_species_response():
-    """Sample SPARQL response for species query."""
-    return {
-        "results": {
-            "bindings": [
-                {
-                    "species": {"value": "http://www.wikidata.org/entity/Q123"},
-                    "avibaseID": {"value": "ABC123DEF456"},
-                    "scientificName": {"value": "Struthio camelus"},
-                },
-                {
-                    "species": {"value": "http://www.wikidata.org/entity/Q456"},
-                    "avibaseID": {"value": "GHI789JKL012"},
-                    "scientificName": {"value": "Thalassarche eremita"},
-                },
-            ]
-        }
-    }
-
-
-@pytest.fixture
-def sample_sparql_labels_response():
-    """Sample SPARQL response for multilingual labels query."""
-    return {
-        "results": {
-            "bindings": [
-                # Real translations
-                {
-                    "species": {"value": "http://www.wikidata.org/entity/Q123"},
-                    "label": {"value": "Common Ostrich"},
-                    "lang": {"value": "en"},
-                },
-                {
-                    "species": {"value": "http://www.wikidata.org/entity/Q123"},
-                    "label": {"value": "Avestruz Común"},
-                    "lang": {"value": "es"},
-                },
-                # Scientific name fallback (should be filtered)
-                {
-                    "species": {"value": "http://www.wikidata.org/entity/Q456"},
-                    "label": {"value": "Thalassarche eremita"},
-                    "lang": {"value": "es"},
-                },
-                # Real translation
-                {
-                    "species": {"value": "http://www.wikidata.org/entity/Q456"},
-                    "label": {"value": "Chatham Albatross"},
-                    "lang": {"value": "en"},
-                },
-            ]
-        }
-    }
 
 
 class TestWikidataDatabaseBuilder:
