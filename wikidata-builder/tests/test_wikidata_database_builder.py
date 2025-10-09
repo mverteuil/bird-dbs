@@ -11,7 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlmodel import SQLModel
 
-from wikidata_reference_builder.wikidata_database_builder import WikidataDatabaseBuilder
+from wikidata_reference_builder.wikidata_database_builder import (
+    WikidataDatabaseBuilder,
+)
 from wikidata_reference_builder.wikidata_models import (
     WikidataSpecies,
     WikidataTranslation,
@@ -122,7 +124,7 @@ class TestWikidataDatabaseBuilder:
                     "SELECT",
                     "?species wdt:P2026 ?avibaseID",
                     "?species wdt:P225 ?scientificName",
-                    "?species wdt:P31 wd:Q16521",
+                    "?species wdt:P105 wd:Q7432",  # taxon rank = species
                 ],
                 id="basic-query-elements",
             ),
@@ -156,20 +158,21 @@ class TestWikidataDatabaseBuilder:
 
     def test_build_labels_query_language_filter(self, builder):
         """Should filter labels query to target languages."""
-        # Patch TARGET_LANGUAGES
-        with patch("wikidata_database_builder.TARGET_LANGUAGES", ["nb", "eu"]):
+        # Patch TARGET_LANGUAGES as class attribute
+        with patch.object(WikidataDatabaseBuilder, "TARGET_LANGUAGES", ["nb", "eu"]):
             query = builder._build_labels_query(["Q123"])
 
             assert '"nb"' in query
             assert '"eu"' in query
 
-    @patch("wikidata_database_builder.SPARQLWrapper", autospec=True)
-    def test_query_species_data(self, mock_sparql, builder, sample_sparql_species_response):
+    @patch("wikidata_reference_builder.wikidata_database_builder.requests.get")
+    def test_query_species_data(self, mock_get, builder, sample_sparql_species_response):
         """Should query species data from Wikidata."""
-        # Mock SPARQL response
-        mock_wrapper = MagicMock(spec=SPARQLWrapper)
-        mock_wrapper.query.return_value.convert.return_value = sample_sparql_species_response
-        mock_sparql.return_value = mock_wrapper
+        # Mock requests.get response
+        mock_response = MagicMock()
+        mock_response.json.return_value = sample_sparql_species_response
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
 
         species_data = builder._query_species_data()
 
@@ -178,19 +181,20 @@ class TestWikidataDatabaseBuilder:
         assert species_data[0]["avibase_id"] == "ABC123DEF456"
         assert species_data[0]["scientific_name"] == "Struthio camelus"
 
-    @patch("wikidata_database_builder.SPARQLWrapper", autospec=True)
+    @patch("wikidata_reference_builder.wikidata_database_builder.requests.get")
     def test_query_multilingual_labels(
         self,
-        mock_sparql,
+        mock_get,
         builder,
         sample_sparql_species_response,
         sample_sparql_labels_response,
     ):
         """Should query multilingual labels from Wikidata."""
-        # Mock SPARQL response
-        mock_wrapper = MagicMock(spec=SPARQLWrapper)
-        mock_wrapper.query.return_value.convert.return_value = sample_sparql_labels_response
-        mock_sparql.return_value = mock_wrapper
+        # Mock requests.get response
+        mock_response = MagicMock()
+        mock_response.json.return_value = sample_sparql_labels_response
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
 
         # Parse species data first
         species_data = [
@@ -259,12 +263,14 @@ class TestWikidataDatabaseBuilder:
         assert len(filtered) == 1
         assert filtered[0]["common_name"] == "Test Bird"
 
-    @patch("wikidata_database_builder.SPARQLWrapper", autospec=True)
-    def test_insert_species(self, mock_sparql, builder, sample_sparql_species_response):
+    @patch("wikidata_reference_builder.wikidata_database_builder.requests.get")
+    def test_insert_species(self, mock_get, builder, sample_sparql_species_response):
         """Should insert species into database."""
-        mock_wrapper = MagicMock(spec=SPARQLWrapper)
-        mock_wrapper.query.return_value.convert.return_value = sample_sparql_species_response
-        mock_sparql.return_value = mock_wrapper
+        # Mock requests.get response
+        mock_response = MagicMock()
+        mock_response.json.return_value = sample_sparql_species_response
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
 
         species_data = builder._query_species_data()
         builder._insert_species(species_data)
@@ -277,8 +283,7 @@ class TestWikidataDatabaseBuilder:
             assert species[0].avibase_id == "ABC123DEF456"
             assert species[0].wikidata_id == "Q123"
 
-    @patch("wikidata_database_builder.SPARQLWrapper", autospec=True)
-    def test_insert_translations(self, mock_sparql, builder):
+    def test_insert_translations(self, builder):
         """Should insert translations into database."""
         # First insert species
         species_data = [
@@ -322,20 +327,20 @@ class TestWikidataDatabaseBuilder:
 
     def test_handle_api_timeout(self, builder):
         """Should handle API timeout errors."""
-        with patch("wikidata_database_builder.SPARQLWrapper", autospec=True) as mock_sparql:
-            mock_wrapper = MagicMock(spec=SPARQLWrapper)
-            mock_wrapper.query.side_effect = Exception("Timeout")
-            mock_sparql.return_value = mock_wrapper
+        with patch("wikidata_reference_builder.wikidata_database_builder.requests.get") as mock_get:
+            mock_get.side_effect = Exception("Timeout")
 
             with pytest.raises(Exception, match="Timeout"):
                 builder._query_species_data()
 
     def test_handle_empty_response(self, builder):
         """Should handle empty API responses."""
-        with patch("wikidata_database_builder.SPARQLWrapper", autospec=True) as mock_sparql:
-            mock_wrapper = MagicMock(spec=SPARQLWrapper)
-            mock_wrapper.query.return_value.convert.return_value = {"results": {"bindings": []}}
-            mock_sparql.return_value = mock_wrapper
+        with patch("wikidata_reference_builder.wikidata_database_builder.requests.get") as mock_get:
+            # Mock requests.get response with empty results
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"results": {"bindings": []}}
+            mock_response.raise_for_status = MagicMock()
+            mock_get.return_value = mock_response
 
             species_data = builder._query_species_data()
             assert len(species_data) == 0
@@ -413,7 +418,8 @@ class TestWikidataDatabaseBuilder:
 
     def test_language_filtering(self, builder):
         """Should extract only target languages."""
-        with patch("wikidata_database_builder.TARGET_LANGUAGES", ["nb", "eu"]):
+        # Patch TARGET_LANGUAGES as class attribute
+        with patch.object(WikidataDatabaseBuilder, "TARGET_LANGUAGES", ["nb", "eu"]):
             query = builder._build_labels_query(["Q123"])
 
             # Should only include target languages

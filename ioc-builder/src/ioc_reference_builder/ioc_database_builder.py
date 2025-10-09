@@ -206,10 +206,10 @@ class IOCDatabaseBuilder:
                                         "avibase_id": avibase_id,
                                         "scientific_name": scientific_name,
                                         "english_name": english_name,
-                                        "order": order_name,
+                                        "order_name": order_name,
                                         "family": family_latin,
                                         "genus": genus_name,
-                                        "species": species_epithet,
+                                        "species_epithet": species_epithet,
                                         "authority": authority,
                                         "breeding_regions": breeding_regions,
                                         "breeding_subregions": breeding_subregions,
@@ -423,7 +423,7 @@ class IOCDatabaseBuilder:
             session.execute(
                 text("""
                 CREATE INDEX IF NOT EXISTS idx_species_order_family
-                ON species("order", family)
+                ON species(order_name, family)
             """)
             )
 
@@ -435,12 +435,8 @@ class IOCDatabaseBuilder:
             )
 
             # Indexes for translations table
-            session.execute(
-                text("""
-                CREATE INDEX IF NOT EXISTS idx_translations_avibase_language
-                ON translations(avibase_id, language_code)
-            """)
-            )
+            # NOTE: Composite PK (avibase_id, language_code) automatically creates primary index
+            # No need for separate idx_translations_avibase_language
 
             session.execute(
                 text("""
@@ -536,10 +532,10 @@ class IOCDatabaseBuilder:
                 {
                     "scientific_name": scientific_name,
                     "english_name": str(row["English name"]).strip(),
-                    "order": str(row["Order"]).strip(),
+                    "order_name": str(row["Order"]).strip(),
                     "family": str(row["Family"]).strip(),
                     "genus": genus,
-                    "species": species_epithet,
+                    "species_epithet": species_epithet,
                     "authority": (
                         str(row.get("Authority", "")).strip()
                         if row.get("Authority") is not None and str(row.get("Authority")).strip()

@@ -21,16 +21,24 @@ class IOCSpecies(SQLModel, table=True):
 
     __tablename__: str = "species"  # type: ignore[assignment]
 
-    avibase_id: str = Field(sa_column=Column(String(20), primary_key=True))  # e.g., "ABC123DEF456"
-    scientific_name: str = Field(sa_column=Column(String(80)))  # e.g., "Turdus migratorius"
+    avibase_id: str = Field(
+        sa_column=Column(String(20), primary_key=True)
+    )  # e.g., "240E33900CE34D44" - stable across taxonomy changes
+    scientific_name: str = Field(
+        sa_column=Column(String(80), unique=True, index=True)
+    )  # e.g., "Turdus migratorius" - lookup from BirdNET tensor output
     english_name: str = Field(sa_column=Column(String(80)))  # e.g., "American Robin"
-    order: str = Field(sa_column=Column(String(30)))  # e.g., "PASSERIFORMES"
+    order_name: str = Field(sa_column=Column(String(30)))  # e.g., "PASSERIFORMES"
     family: str = Field(sa_column=Column(String(30)))  # e.g., "Turdidae"
     genus: str = Field(sa_column=Column(String(30)))  # e.g., "Turdus"
-    species: str = Field(sa_column=Column(String(30)))  # e.g., "migratorius"
+    species_epithet: str = Field(sa_column=Column(String(30)))  # e.g., "migratorius"
     authority: str | None = Field(
         default=None, sa_column=Column(String(60))
     )  # e.g., "Linnaeus, 1766"
+    breeding_regions: str | None = Field(default=None, sa_column=Column(String(20)))  # e.g., "NA"
+    breeding_subregions: str | None = Field(
+        default=None, sa_column=Column(String(200))
+    )  # e.g., "n,c,e"
 
     # Relationships - One-to-many: one species has many translations
     # NOTE: Relationships commented out because IOC database is attached separately
@@ -42,11 +50,13 @@ class IOCTranslation(SQLModel, table=True):
     """IOC species translations for multilingual support."""
 
     __tablename__: str = "translations"  # type: ignore[assignment]
-    __table_args__ = ({"sqlite_autoincrement": True},)
 
-    id: int | None = Field(default=None, primary_key=True)
-    avibase_id: str = Field(foreign_key="species.avibase_id")  # e.g., "ABC123DEF456"
-    language_code: str = Field(sa_column=Column(String(8)))  # e.g., "es", "fr", "zh-TW"
+    avibase_id: str = Field(
+        foreign_key="species.avibase_id", primary_key=True
+    )  # Composite PK part 1
+    language_code: str = Field(
+        sa_column=Column(String(8), primary_key=True)
+    )  # e.g., "es", "fr", "zh-TW" - Composite PK part 2
     common_name: str = Field(sa_column=Column(String(120)))  # e.g., "Zorzal robín"
 
     # Relationships - Many-to-one: many translations belong to one species

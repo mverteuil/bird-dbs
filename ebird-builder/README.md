@@ -189,10 +189,60 @@ ebird_min_frequency: 0.01
 
 ## Testing
 
-```bash
-# Run unit tests
-cargo test
+### Running Tests
 
+```bash
+# Run all unit tests
+cargo test --all-features
+
+# Or use the Makefile
+make test
+```
+
+### Code Coverage
+
+The project uses `cargo-llvm-cov` for code coverage reporting.
+
+**Prerequisites** (macOS with Homebrew):
+```bash
+# Install cargo-llvm-cov (one-time setup)
+cargo install cargo-llvm-cov
+
+# LLVM tools are already available via Homebrew's rust installation
+# Environment variables are configured in .cargo/config.toml and Makefile
+```
+
+**Generate Coverage Reports**:
+
+```bash
+# Terminal coverage summary (recommended for quick checks)
+make coverage
+
+# HTML coverage report (opens in browser)
+make coverage-html
+
+# LCOV format (for CI/CD integration)
+make coverage-lcov
+
+# Clean coverage artifacts
+make clean
+```
+
+**Current Coverage** (as of last run):
+- **Overall**: 74.74% regions, 82.83% functions, 68.84% lines
+- **Core modules**:
+  - `ebird/record.rs`: 100% (data parsing & filtering)
+  - `h3/aggregator.rs`: 94.96% regions, 96.71% lines
+  - `h3/grid.rs`: 92.68% regions, 92.50% lines
+- **Uncovered**: `config.rs`, `db/writer.rs`, `main.rs` (CLI entry points)
+
+**Understanding the Reports**:
+- HTML report: `target/llvm-cov/html/index.html`
+- LCOV file: `lcov.info` (for CI tools like codecov, coveralls)
+
+### Integration Testing
+
+```bash
 # Run with sample data
 cargo run --release -- \
   --input examples/sample_data.tsv \

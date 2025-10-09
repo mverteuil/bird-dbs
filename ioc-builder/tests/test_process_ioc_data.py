@@ -101,7 +101,7 @@ class TestDownloadCommand:
     def test_download_partial_failure(self, runner, mocker):
         """Should handle download when some files fail."""
 
-        def mock_get_side_effect(url, timeout=None):
+        def mock_get_side_effect(url, headers=None, timeout=None):
             if "red" in url:
                 # Fail for red file
                 response = MagicMock(spec=requests.Response)

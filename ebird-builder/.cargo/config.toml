@@ -1,4 +1,8 @@
-[build]
-# Disable incremental compilation to avoid filesystem locking issues
-# on volumes that don't support file locking (e.g., network drives, backup volumes)
-incremental = false
+# Cargo configuration for ebird-builder
+#
+# This sets environment variables needed for cargo-llvm-cov when using
+# Homebrew-installed LLVM tools on macOS
+
+[env]
+LLVM_COV = "/opt/homebrew/opt/llvm/bin/llvm-cov"
+LLVM_PROFDATA = "/opt/homebrew/opt/llvm/bin/llvm-profdata"

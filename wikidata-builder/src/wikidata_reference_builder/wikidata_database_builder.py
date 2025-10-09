@@ -22,7 +22,7 @@ from sqlalchemy import create_engine, delete, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlmodel import SQLModel
 
-from wikidata_models import (
+from wikidata_reference_builder.wikidata_models import (
     WikidataLanguage,
     WikidataMetadata,
     WikidataSpecies,
@@ -150,7 +150,7 @@ class WikidataDatabaseBuilder:
 
         # Fetch bird species with Avibase IDs
         print("\nQuerying Wikidata for bird species with Avibase IDs (P2026)...")
-        species_data = self._query_bird_species(limit=limit, sample_mode=sample_mode)
+        species_data = self._query_species_data(limit=limit, sample_mode=sample_mode)
 
         print(f"Found {len(species_data)} bird species")
 
@@ -163,8 +163,8 @@ class WikidataDatabaseBuilder:
 
         # Insert into database
         print("\nInserting data into database...")
-        self._insert_species_batch(species_data)
-        self._insert_translations_batch(translation_data)
+        self._insert_species(species_data)
+        self._insert_translations(translation_data)
         self._insert_language_metadata(language_counts)
         self._store_metadata(len(species_data), sum(language_counts.values()), language_counts)
 
@@ -174,19 +174,15 @@ class WikidataDatabaseBuilder:
         print("\n✓ Database population complete!")
         return len(species_data), sum(language_counts.values())
 
-    def _query_bird_species(
-        self, limit: int | None = None, sample_mode: bool = False
-    ) -> list[dict[str, str]]:
-        """Query Wikidata for bird species with Avibase IDs.
+    def _build_species_query(self, limit: int | None = None) -> str:
+        """Build SPARQL query for bird species with Avibase IDs.
 
         Args:
             limit: Optional limit on number of results
-            sample_mode: If True, use SAMPLE for random subset
 
         Returns:
-            List of species dicts with wikidata_id, scientific_name, avibase_id, etc.
+            SPARQL query string
         """
-        # Build SPARQL query
         query = """
         SELECT DISTINCT ?species ?speciesLabel ?scientificName ?avibaseID
         WHERE {
@@ -207,6 +203,21 @@ class WikidataDatabaseBuilder:
         if limit:
             query += f"\nLIMIT {limit}"
 
+        return query
+
+    def _query_species_data(
+        self, limit: int | None = None, sample_mode: bool = False
+    ) -> list[dict[str, str]]:
+        """Query Wikidata for bird species with Avibase IDs.
+
+        Args:
+            limit: Optional limit on number of results
+            sample_mode: If True, use SAMPLE for random subset (currently unused)
+
+        Returns:
+            List of species dicts with wikidata_id, scientific_name, avibase_id, etc.
+        """
+        query = self._build_species_query(limit=limit)
         results = self._execute_sparql_query(query)
 
         species_data = []
@@ -228,7 +239,7 @@ class WikidataDatabaseBuilder:
                         {
                             "wikidata_id": species_id,
                             "scientific_name": scientific_name or english_label,
-                            "avibase_id_native": avibase_id,
+                            "avibase_id": avibase_id,
                             "taxon_rank": "Q7432",  # All results are species-level (filtered in query)
                             "english_name": english_label,
                         }
@@ -238,6 +249,34 @@ class WikidataDatabaseBuilder:
             print(f"  WARNING: Found {len(duplicates)} duplicate Wikidata IDs: {duplicates[:10]}")
 
         return species_data
+
+    def _build_labels_query(
+        self, species_ids: list[str], languages: list[str] | None = None
+    ) -> str:
+        """Build SPARQL query for multilingual labels.
+
+        Args:
+            species_ids: List of Wikidata IDs (e.g., ["Q123", "Q456"])
+            languages: Optional list of language codes (defaults to TARGET_LANGUAGES)
+
+        Returns:
+            SPARQL query string
+        """
+        if languages is None:
+            languages = self.TARGET_LANGUAGES
+
+        values_clause = " ".join([f"wd:{species_id}" for species_id in species_ids])
+
+        query = f"""
+        SELECT ?species ?label (LANG(?label) AS ?lang)
+        WHERE {{
+          VALUES ?species {{ {values_clause} }}
+          ?species rdfs:label ?label .
+          FILTER(LANG(?label) IN ({",".join([f'"{lang}"' for lang in languages])}))
+        }}
+        """
+
+        return query
 
     def _query_multilingual_labels(
         self, species_data: list[dict[str, str]]
@@ -253,8 +292,9 @@ class WikidataDatabaseBuilder:
         translation_data = []
         language_counts = defaultdict(int)
 
-        # Create mapping of wikidata_id to scientific_name for filtering
+        # Create mappings for filtering and foreign key
         species_names = {sp["wikidata_id"]: sp["scientific_name"] for sp in species_data}
+        wikidata_to_avibase = {sp["wikidata_id"]: sp["avibase_id"] for sp in species_data}
         filtered_count = 0
 
         # Batch species by 50 to avoid query timeout
@@ -268,18 +308,9 @@ class WikidataDatabaseBuilder:
 
             print(f"  Processing batch {batch_num + 1}/{total_batches} ({len(batch)} species)...")
 
-            # Build VALUES clause for batch
-            values_clause = " ".join([f"wd:{sp['wikidata_id']}" for sp in batch])
-
-            # Query for labels in target languages
-            query = f"""
-            SELECT ?species ?label (LANG(?label) AS ?lang)
-            WHERE {{
-              VALUES ?species {{ {values_clause} }}
-              ?species rdfs:label ?label .
-              FILTER(LANG(?label) IN ({",".join([f'"{lang}"' for lang in self.TARGET_LANGUAGES])}))
-            }}
-            """
+            # Build query for this batch
+            batch_ids = [sp["wikidata_id"] for sp in batch]
+            query = self._build_labels_query(batch_ids)
 
             results = self._execute_sparql_query(query)
 
@@ -291,9 +322,10 @@ class WikidataDatabaseBuilder:
                 if species_id and label and lang:
                     # FILTER: Only add if label is NOT the scientific name
                     scientific_name = species_names.get(species_id)
-                    if label != scientific_name:
+                    avibase_id = wikidata_to_avibase.get(species_id)
+                    if label != scientific_name and avibase_id:
                         translation_data.append(
-                            {"wikidata_id": species_id, "language_code": lang, "common_name": label}
+                            {"avibase_id": avibase_id, "language_code": lang, "common_name": label}
                         )
                         language_counts[lang] += 1
                     else:
@@ -329,19 +361,37 @@ class WikidataDatabaseBuilder:
             print(f"ERROR: SPARQL query failed: {e}")
             return {}
 
-    def _insert_species_batch(self, species_data: list[dict[str, str]]) -> None:
-        """Insert species data in batch.
+    def _insert_species(self, species_data: list[dict[str, str]]) -> None:
+        """Insert species data in batch, ignoring duplicates.
 
         Args:
             species_data: List of species dicts
         """
         with self.get_db() as session:
             self._set_bulk_insert_pragmas(session)
-            session.bulk_insert_mappings(WikidataSpecies, species_data)
+
+            # Use INSERT OR IGNORE to handle duplicate wikidata_id gracefully
+            for species in species_data:
+                # Prepare parameters with NULL for missing optional fields
+                params = {
+                    "wikidata_id": species["wikidata_id"],
+                    "scientific_name": species["scientific_name"],
+                    "avibase_id": species.get("avibase_id"),
+                    "taxon_rank": species.get("taxon_rank"),
+                    "english_name": species.get("english_name"),
+                }
+                session.execute(
+                    text("""
+                        INSERT OR IGNORE INTO species (wikidata_id, scientific_name, avibase_id, taxon_rank, english_name)
+                        VALUES (:wikidata_id, :scientific_name, :avibase_id, :taxon_rank, :english_name)
+                    """),
+                    params,
+                )
+
             session.commit()
             self._restore_normal_pragmas(session)
 
-    def _insert_translations_batch(self, translation_data: list[dict[str, str]]) -> None:
+    def _insert_translations(self, translation_data: list[dict[str, str]]) -> None:
         """Insert translation data in batches.
 
         Args:
@@ -411,29 +461,10 @@ class WikidataDatabaseBuilder:
         with self.get_db() as session:
             print("Creating performance indexes...")
 
-            # Index on avibase_id for lookups
-            session.execute(
-                text("""
-                CREATE INDEX IF NOT EXISTS idx_species_avibase
-                ON species(avibase_id_native)
-            """)
-            )
-
-            # Index on scientific name
-            session.execute(
-                text("""
-                CREATE INDEX IF NOT EXISTS idx_species_scientific
-                ON species(scientific_name)
-            """)
-            )
-
-            # Index on wikidata_id + language for translations
-            session.execute(
-                text("""
-                CREATE INDEX IF NOT EXISTS idx_translations_wikidata_lang
-                ON translations(wikidata_id, language_code)
-            """)
-            )
+            # NOTE: avibase_id is PK, automatically indexed
+            # NOTE: scientific_name has index=True in model, automatically indexed
+            # NOTE: wikidata_id has unique=True in model, automatically indexed
+            # NOTE: translations composite PK (avibase_id, language_code) automatically indexed
 
             # Index on language + common name for reverse lookups
             session.execute(
@@ -517,6 +548,23 @@ class WikidataDatabaseBuilder:
             "sl": "Slovenian",
             "is": "Icelandic",
             "af": "Afrikaans",
+        }
+
+    def get_statistics(self) -> dict[str, int]:
+        """Get database statistics matching ioc-builder interface.
+
+        Returns:
+            Dictionary with species_count, translation_count, and language_count
+        """
+        with self.get_db() as session:
+            species_count = session.query(WikidataSpecies).count()
+            translation_count = session.query(WikidataTranslation).count()
+            language_count = session.query(WikidataLanguage).count()
+
+        return {
+            "species_count": species_count,
+            "translation_count": translation_count,
+            "language_count": language_count,
         }
 
     def generate_coverage_report(self) -> dict[str, Any]:

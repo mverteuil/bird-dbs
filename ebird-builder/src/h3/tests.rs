@@ -36,6 +36,7 @@ mod tests {
             min_observations: 2,
             min_checklists: 2,
             min_yearly_frequency: 0.001,
+            deduplication: crate::config::DeduplicationMode::GroupIdentifier,
         }
     }
 

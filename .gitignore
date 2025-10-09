@@ -60,3 +60,12 @@ output/
 # Test databases
 *_test.db
 poc_*.db
+
+# Coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+*.profraw
+*.profdata
+lcov.info
+target/llvm-cov/

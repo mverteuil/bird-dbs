@@ -15,11 +15,15 @@ class WikidataSpecies(SQLModel, table=True):
 
     __tablename__: str = "species"  # type: ignore[assignment]
 
-    wikidata_id: str = Field(sa_column=Column(String(20), primary_key=True))  # e.g., "Q1234567"
-    scientific_name: str = Field(sa_column=Column(String(80)))  # e.g., "Passer domesticus"
-    avibase_id_native: str | None = Field(
-        default=None, sa_column=Column(String(20))
-    )  # e.g., "240E33900CE34D44" (16-char)
+    avibase_id: str = Field(
+        sa_column=Column(String(20), primary_key=True)
+    )  # e.g., "240E33900CE34D44" - stable across taxonomy changes, matches ioc-builder
+    scientific_name: str = Field(
+        sa_column=Column(String(80), unique=True, index=True)
+    )  # e.g., "Passer domesticus" - lookup from BirdNET tensor output
+    wikidata_id: str = Field(
+        sa_column=Column(String(20), unique=True)
+    )  # e.g., "Q1234567" - source entity reference
     taxon_rank: str | None = Field(default=None, sa_column=Column(String(30)))  # e.g., "species"
     # Common name in English as reference
     english_name: str | None = Field(default=None, sa_column=Column(String(120)))
@@ -29,11 +33,13 @@ class WikidataTranslation(SQLModel, table=True):
     """Wikidata multilingual labels for bird species."""
 
     __tablename__: str = "translations"  # type: ignore[assignment]
-    __table_args__ = ({"sqlite_autoincrement": True},)
 
-    id: int | None = Field(default=None, primary_key=True)
-    wikidata_id: str = Field(foreign_key="species.wikidata_id")
-    language_code: str = Field(sa_column=Column(String(10)))  # e.g., "es", "fr", "zh"
+    avibase_id: str = Field(
+        foreign_key="species.avibase_id", primary_key=True
+    )  # Composite PK part 1 - matches ioc-builder interface
+    language_code: str = Field(
+        sa_column=Column(String(10), primary_key=True)
+    )  # e.g., "es", "fr", "zh" - Composite PK part 2
     common_name: str = Field(sa_column=Column(String(150)))  # e.g., "Gorrión común"
 
 

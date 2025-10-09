@@ -220,7 +220,7 @@ impl H3CellData {
     }
 }
 
-fn compute_monthly_data(
+pub(crate) fn compute_monthly_data(
     observations: &[ObservationEvent],
     total_complete_checklists: f64,
 ) -> ([f64; 12], [u32; 12]) {
@@ -244,7 +244,7 @@ fn compute_monthly_data(
     (monthly_frequency, monthly_obs)
 }
 
-fn classify_species(yearly_frequency: f64) -> (String, f64) {
+pub(crate) fn classify_species(yearly_frequency: f64) -> (String, f64) {
     let tier = if yearly_frequency >= 0.20 {
         "common"
     } else if yearly_frequency >= 0.05 {

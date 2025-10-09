@@ -316,10 +316,10 @@ class TestIOCModels:
                 avibase_id="TEST123",
                 scientific_name="Test species",
                 english_name="Test Species",
-                order="TESTORDER",
+                order_name="TESTORDER",
                 family="Testidae",
                 genus="Test",
-                species="species",
+                species_epithet="species",
             )
             session.add(species)
             session.commit()
@@ -342,10 +342,10 @@ class TestIOCModels:
                 avibase_id="TEST123",
                 scientific_name="Test species",
                 english_name="Test Species",
-                order="TESTORDER",
+                order_name="TESTORDER",
                 family="Testidae",
                 genus="Test",
-                species="species",
+                species_epithet="species",
             )
             session.add(species)
             session.commit()
@@ -376,10 +376,10 @@ class TestIOCModels:
                 avibase_id="TEST123",
                 scientific_name="Test species",
                 english_name="Test Species",
-                order="TESTORDER",
+                order_name="TESTORDER",
                 family="Testidae",
                 genus="Test",
-                species="species",
+                species_epithet="species",
             )
             session.add(species1)
             session.commit()
@@ -389,10 +389,10 @@ class TestIOCModels:
                 avibase_id="TEST123",  # Same ID
                 scientific_name="Different species",
                 english_name="Different Species",
-                order="TESTORDER",
+                order_name="TESTORDER",
                 family="Testidae",
                 genus="Different",
-                species="species",
+                species_epithet="species",
             )
             session.add(species2)
 
@@ -438,7 +438,7 @@ class TestIOCDatabaseBuilderIntegration:
             # Check English names
             ostrich = [s for s in species if s.scientific_name == "Struthio camelus"][0]
             assert ostrich.english_name == "Common Ostrich"
-            assert ostrich.order == "STRUTHIONIFORMES"
+            assert ostrich.order_name == "STRUTHIONIFORMES"
             assert ostrich.family == "Struthionidae"
 
     def test_populate_from_xml_and_xlsx(
