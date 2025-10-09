@@ -1,12 +1,11 @@
 #' Extract Avibase ID Mappings
 #'
 #' Extracts the avilistr mapping data and exports to CSV format.
-#' The avilistr package provides mappings between different taxonomic
-#' authorities (IOC, Clements, eBird, etc.) via stable Avibase IDs.
+#' The avilistr package (v2025) provides the AviList Global Avian Checklist
+#' with stable Avibase IDs and cross-references to major authorities.
 #'
 #' @param output_path Character. Path to output CSV file.
-#' @param authorities Character vector. Which taxonomic authorities to include.
-#'   Default: c("ioc", "clements", "ebird")
+#' @param include_urls Logical. Include Birds of the World URLs. Default: TRUE
 #' @param verbose Logical. Print progress messages. Default: TRUE
 #'
 #' @return Invisible. Writes CSV file to output_path.
@@ -18,7 +17,7 @@
 #' }
 extract_avilistr_mapping <- function(
     output_path = "../shared/avilistr/avilistr_mapping.csv",
-    authorities = c("ioc", "clements", "ebird"),
+    include_urls = TRUE,
     verbose = TRUE) {
   # Check if avilistr is installed
   if (!requireNamespace("avilistr", quietly = TRUE)) {
@@ -33,47 +32,48 @@ extract_avilistr_mapping <- function(
     message("Loading avilistr package...")
   }
 
-  # Load the package and get the mapping data
-  # The avilistr package provides the 'birdlist' dataset
-  data("birdlist", package = "avilistr", envir = environment())
+  # Load the AviList 2025 dataset
+  data("avilist_2025", package = "avilistr", envir = environment())
 
-  if (!exists("birdlist")) {
-    stop("Could not load 'birdlist' dataset from avilistr package", call. = FALSE)
+  if (!exists("avilist_2025")) {
+    stop("Could not load 'avilist_2025' dataset from avilistr package", call. = FALSE)
   }
 
   if (verbose) {
-    message(sprintf("Loaded %d species records", nrow(birdlist)))
+    message(sprintf("Loaded %d records from AviList 2025", nrow(avilist_2025)))
   }
 
   # Convert to tibble for better handling
-  mapping_data <- tibble::as_tibble(birdlist)
+  mapping_data <- tibble::as_tibble(avilist_2025)
 
-  # Select relevant columns based on authorities requested
-  # Standard columns: scientific_name, avibase_id
-  # Authority-specific columns: ioc_scientific_name, clements_scientific_name, etc.
+  # Filter to species level only (exclude orders, families, genera)
+  mapping_data <- dplyr::filter(mapping_data, Taxon_rank == "species")
 
-  base_cols <- c("scientific_name", "avibase_id")
-
-  # Build column selection based on authorities
-  authority_cols <- character(0)
-  if ("ioc" %in% authorities && "ioc_scientific_name" %in% names(mapping_data)) {
-    authority_cols <- c(authority_cols, "ioc_scientific_name")
+  if (verbose) {
+    message(sprintf("Filtered to %d species-level records", nrow(mapping_data)))
   }
-  if ("clements" %in% authorities && "clements_scientific_name" %in% names(mapping_data)) {
-    authority_cols <- c(authority_cols, "clements_scientific_name")
-  }
-  if ("ebird" %in% authorities && "ebird_scientific_name" %in% names(mapping_data)) {
-    authority_cols <- c(authority_cols, "ebird_scientific_name")
+
+  # Select relevant columns
+  base_cols <- c(
+    "Scientific_name",
+    "AvibaseID",
+    "English_name_AviList",
+    "English_name_Clements_v2024",
+    "Species_code_Cornell_Lab"
+  )
+
+  # Add URLs if requested
+  if (include_urls) {
+    base_cols <- c(base_cols, "Birds_of_the_World_URL")
   }
 
   # Select columns (only those that exist in the data)
-  available_cols <- c(base_cols, authority_cols)
-  available_cols <- available_cols[available_cols %in% names(mapping_data)]
+  available_cols <- base_cols[base_cols %in% names(mapping_data)]
 
   mapping_export <- dplyr::select(mapping_data, dplyr::all_of(available_cols))
 
-  # Remove rows with missing avibase_id (critical field)
-  mapping_export <- dplyr::filter(mapping_export, !is.na(avibase_id))
+  # Remove rows with missing AvibaseID (critical field)
+  mapping_export <- dplyr::filter(mapping_export, !is.na(AvibaseID))
 
   if (verbose) {
     message(sprintf("Filtered to %d species with valid Avibase IDs", nrow(mapping_export)))
@@ -148,11 +148,11 @@ validate_mapping <- function(csv_path, min_species = 10000) {
   checks <- list(
     file_exists = TRUE,
     row_count = nrow(data),
-    has_avibase_id = "avibase_id" %in% names(data),
-    has_scientific_name = "scientific_name" %in% names(data),
-    has_ioc = "ioc_scientific_name" %in% names(data),
-    missing_avibase = sum(is.na(data$avibase_id)),
-    unique_avibase = length(unique(data$avibase_id)),
+    has_avibase_id = "AvibaseID" %in% names(data),
+    has_scientific_name = "Scientific_name" %in% names(data),
+    has_bow_url = "Birds_of_the_World_URL" %in% names(data),
+    missing_avibase = sum(is.na(data$AvibaseID)),
+    unique_avibase = length(unique(data$AvibaseID)),
     meets_minimum = nrow(data) >= min_species
   )
 
@@ -176,14 +176,14 @@ validate_mapping <- function(csv_path, min_species = 10000) {
 #'
 #' @export
 print.avilistr_validation <- function(x, ...) {
-  cat("Avilistr Mapping Validation\n")
-  cat("===========================\n\n")
+  cat("Avilistr Mapping Validation (AviList 2025)\n")
+  cat("==========================================\n\n")
 
   cat(sprintf("✓ File exists: %s\n", x$file_exists))
   cat(sprintf("✓ Row count: %d\n", x$row_count))
-  cat(sprintf("✓ Has avibase_id column: %s\n", x$has_avibase_id))
-  cat(sprintf("✓ Has scientific_name column: %s\n", x$has_scientific_name))
-  cat(sprintf("✓ Has IOC mapping: %s\n", x$has_ioc))
+  cat(sprintf("✓ Has AvibaseID column: %s\n", x$has_avibase_id))
+  cat(sprintf("✓ Has Scientific_name column: %s\n", x$has_scientific_name))
+  cat(sprintf("✓ Has Birds of the World URL: %s\n", x$has_bow_url))
   cat(sprintf("✓ Missing Avibase IDs: %d\n", x$missing_avibase))
   cat(sprintf("✓ Unique Avibase IDs: %d\n", x$unique_avibase))
   cat(sprintf("✓ Meets minimum species count: %s\n", x$meets_minimum))
