@@ -115,10 +115,10 @@ class IOCDatabaseBuilder:
         print(f"Database populated: {species_count} species, {translation_count} translations")
 
     def _load_avibase_mapping(self, avilistr_csv: Path) -> dict[str, str]:
-        """Load Avibase ID mapping from CSV file.
+        """Load Avibase ID mapping from AviList 2025 CSV file.
 
         Args:
-            avilistr_csv: Path to Avibase mapping CSV file
+            avilistr_csv: Path to Avibase mapping CSV file (AviList 2025 format)
 
         Returns:
             Dictionary mapping scientific_name (lowercase) to avibase_id
@@ -129,9 +129,10 @@ class IOCDatabaseBuilder:
         avibase_lookup = {}
 
         for _, row in avilistr_data.iterrows():
-            ioc_name = str(row["ioc_scientific_name"]).strip().lower()
-            avibase_id = str(row["avibase_id"]).strip()
-            avibase_lookup[ioc_name] = avibase_id
+            # AviList 2025 format uses Scientific_name and AvibaseID
+            scientific_name = str(row["Scientific_name"]).strip().lower()
+            avibase_id = str(row["AvibaseID"]).strip()
+            avibase_lookup[scientific_name] = avibase_id
 
         print(f"  Loaded {len(avibase_lookup)} Avibase ID mappings")
         return avibase_lookup
