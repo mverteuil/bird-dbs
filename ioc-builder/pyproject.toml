@@ -6,10 +6,7 @@ build-backend = "setuptools.build_meta"
 dev = [
   "pytest>=7.4.0",
   "pytest-cov>=4.1.0",
-  "pytest-mock>=3.11.0",
-  "mypy>=1.5.0",
-  "types-requests>=2.31.0",
-  "ruff>=0.1.0"
+  "pytest-mock>=3.11.0"
 ]
 
 [project]
@@ -18,7 +15,7 @@ version = "0.1.0"
 description = "IOC World Bird List reference database builder for BirdNET-Pi"
 readme = "README.md"
 requires-python = ">=3.12"
-license = {text = "MIT"}
+license = "CC-BY-NC-SA-4.0"
 authors = [
   {name = "BirdNET-Pi Contributors"}
 ]
@@ -30,6 +27,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12"
 ]
 dependencies = [
+  "click>=8.2.1",
   "pandas>=2.0.0",
   "sqlalchemy>=2.0.0",
   "openpyxl>=3.1.0",
@@ -38,32 +36,18 @@ dependencies = [
 ]
 
 [project.scripts]
-build-ioc-reference = "ioc_database_builder:main"
-process-ioc-data = "process_ioc_data:main"
+build-ioc-reference = "ioc_reference_builder.ioc_database_builder:main"
+process-ioc-data = "ioc_reference_builder.process_ioc_data:main"
 
 [tool.coverage.run]
-source = ["."]
+source = ["src"]
 omit = ["tests/*", "*/pytest-of-*"]
-
-[tool.mypy]
-python_version = "3.12"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-check_untyped_defs = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-
-[[tool.mypy.overrides]]
-module = ["openpyxl.*", "pandas.*"]
-ignore_missing_imports = true
 
 [tool.pyright]
 exclude = ["**/build", "**/__pycache__"]
-include = ["."]
+include = ["src"]
 pythonVersion = "3.12"
+reportArgumentType = "none"
 reportMissingTypeStubs = "none"
 reportUnknownArgumentType = "none"
 reportUnknownLambdaType = "none"
@@ -118,4 +102,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["ioc_database_builder", "ioc_models", "ioc"]
+known-first-party = ["ioc_reference_builder"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

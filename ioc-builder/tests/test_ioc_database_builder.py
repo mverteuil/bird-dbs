@@ -5,12 +5,16 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlmodel import SQLModel
 
-from ioc_database_builder import IOCDatabaseBuilder
-from ioc_models import Base, Species, Translation
+from ioc_reference_builder.ioc_database_builder import IOCDatabaseBuilder
+from ioc_reference_builder.ioc_models import (
+    IOCSpecies,
+    IOCTranslation,
+)
 
 
 @pytest.fixture
@@ -75,30 +79,34 @@ def sample_avilistr_data():
 @pytest.fixture
 def builder(temp_db):
     """Create IOC database builder instance."""
-    return IOCDatabaseBuilder(database_path=temp_db)
+    return IOCDatabaseBuilder(db_path=temp_db)
 
 
 class TestIOCDatabaseBuilder:
     """Tests for IOC database builder."""
 
-    def test_init_creates_database(self, temp_db):
-        """Test that initialization creates database file."""
-        _ = IOCDatabaseBuilder(database_path=temp_db)
-        assert Path(temp_db).exists()
+    @pytest.mark.parametrize(
+        "check_type,expected_result",
+        [
+            pytest.param("database_file", True, id="creates-database-file"),
+            pytest.param("tables", ["species", "translations"], id="creates-required-tables"),
+        ],
+    )
+    def test_initialization(self, temp_db, check_type, expected_result):
+        """Test that initialization creates database and tables correctly."""
+        _ = IOCDatabaseBuilder(db_path=temp_db)
 
-    def test_init_creates_tables(self, temp_db):
-        """Test that initialization creates required tables."""
-        _ = IOCDatabaseBuilder(database_path=temp_db)
-        engine = create_engine(f"sqlite:///{temp_db}")
+        if check_type == "database_file":
+            assert Path(temp_db).exists() == expected_result
+        elif check_type == "tables":
+            engine = create_engine(f"sqlite:///{temp_db}")
+            from sqlalchemy import inspect
 
-        # Check that tables exist
-        from sqlalchemy import inspect
+            inspector = inspect(engine)
+            tables = inspector.get_table_names()
 
-        inspector = inspect(engine)
-        tables = inspector.get_table_names()
-
-        assert "species" in tables
-        assert "translations" in tables
+            for table_name in expected_result:
+                assert table_name in tables
 
     def test_parse_species_data(self, builder, sample_ioc_species_data):
         """Test parsing IOC species data."""
@@ -159,9 +167,9 @@ class TestIOCDatabaseBuilder:
         builder._insert_species(mapped)
 
         # Verify species were inserted
-        engine = create_engine(f"sqlite:///{builder.database_path}")
+        engine = create_engine(f"sqlite:///{builder.db_path}")
         with Session(engine) as session:
-            species = session.execute(select(Species)).scalars().all()
+            species = session.execute(select(IOCSpecies)).scalars().all()
             assert len(species) == 2
             assert species[0].avibase_id == "ABC123DEF456"
             assert species[0].scientific_name == "Struthio camelus"
@@ -185,9 +193,9 @@ class TestIOCDatabaseBuilder:
         builder._insert_translations(translations, sample_avilistr_data)
 
         # Verify translations were inserted
-        engine = create_engine(f"sqlite:///{builder.database_path}")
+        engine = create_engine(f"sqlite:///{builder.db_path}")
         with Session(engine) as session:
-            trans = session.execute(select(Translation)).scalars().all()
+            trans = session.execute(select(IOCTranslation)).scalars().all()
             assert len(trans) == 4
 
             # Check avibase_id mapping worked
@@ -207,9 +215,9 @@ class TestIOCDatabaseBuilder:
         builder._insert_species(mapped)
 
         # Should only have 2 species (no duplicates)
-        engine = create_engine(f"sqlite:///{builder.database_path}")
+        engine = create_engine(f"sqlite:///{builder.db_path}")
         with Session(engine) as session:
-            species = session.execute(select(Species)).scalars().all()
+            species = session.execute(select(IOCSpecies)).scalars().all()
             assert len(species) == 2
 
     def test_language_code_normalization(self, builder):
@@ -262,50 +270,37 @@ class TestIOCDatabaseBuilder:
         assert len(mapped) == 1
         assert mapped[0]["avibase_id"] == "ABC123DEF456"
 
-    def test_validation_species_count(self, builder, sample_ioc_species_data, sample_avilistr_data):
-        """Test validation of species count."""
-        species_list = builder._parse_species_data(sample_ioc_species_data)
-        mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
-        builder._insert_species(mapped)
-
-        stats = builder.get_statistics()
-        assert stats["species_count"] == 2
-
-    def test_validation_translation_count(
+    @pytest.mark.parametrize(
+        "stat_key,expected_value,needs_translations",
+        [
+            pytest.param("species_count", 2, False, id="species-count"),
+            pytest.param("translation_count", 4, True, id="translation-count"),
+            pytest.param("language_count", 2, True, id="language-count-spanish-french"),
+        ],
+    )
+    def test_validation_statistics(
         self,
         builder,
         sample_ioc_species_data,
         sample_ioc_multilingual_data,
         sample_avilistr_data,
+        stat_key,
+        expected_value,
+        needs_translations,
     ):
-        """Test validation of translation count."""
+        """Test validation of database statistics."""
+        # Always insert species
         species_list = builder._parse_species_data(sample_ioc_species_data)
         mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
         builder._insert_species(mapped)
 
-        translations = builder._parse_multilingual_data(sample_ioc_multilingual_data)
-        builder._insert_translations(translations, sample_avilistr_data)
+        # Conditionally insert translations based on test requirements
+        if needs_translations:
+            translations = builder._parse_multilingual_data(sample_ioc_multilingual_data)
+            builder._insert_translations(translations, sample_avilistr_data)
 
         stats = builder.get_statistics()
-        assert stats["translation_count"] == 4
-
-    def test_validation_language_count(
-        self,
-        builder,
-        sample_ioc_species_data,
-        sample_ioc_multilingual_data,
-        sample_avilistr_data,
-    ):
-        """Test validation of language count."""
-        species_list = builder._parse_species_data(sample_ioc_species_data)
-        mapped = builder._map_avibase_ids(species_list, sample_avilistr_data)
-        builder._insert_species(mapped)
-
-        translations = builder._parse_multilingual_data(sample_ioc_multilingual_data)
-        builder._insert_translations(translations, sample_avilistr_data)
-
-        stats = builder.get_statistics()
-        assert stats["language_count"] == 2  # Spanish and French
+        assert stats[stat_key] == expected_value
 
 
 class TestIOCModels:
@@ -314,10 +309,10 @@ class TestIOCModels:
     def test_species_model_required_fields(self, temp_db):
         """Test that Species model has required fields."""
         engine = create_engine(f"sqlite:///{temp_db}")
-        Base.metadata.create_all(engine)
+        SQLModel.metadata.create_all(engine)
 
         with Session(engine) as session:
-            species = Species(
+            species = IOCSpecies(
                 avibase_id="TEST123",
                 scientific_name="Test species",
                 english_name="Test Species",
@@ -330,7 +325,7 @@ class TestIOCModels:
             session.commit()
 
             retrieved = session.execute(
-                select(Species).where(Species.avibase_id == "TEST123")
+                select(IOCSpecies).where(IOCSpecies.avibase_id == "TEST123")
             ).scalar_one()
 
             assert retrieved.scientific_name == "Test species"
@@ -339,11 +334,11 @@ class TestIOCModels:
     def test_translation_model_required_fields(self, temp_db):
         """Test that Translation model has required fields."""
         engine = create_engine(f"sqlite:///{temp_db}")
-        Base.metadata.create_all(engine)
+        SQLModel.metadata.create_all(engine)
 
         with Session(engine) as session:
             # First create a species
-            species = Species(
+            species = IOCSpecies(
                 avibase_id="TEST123",
                 scientific_name="Test species",
                 english_name="Test Species",
@@ -356,7 +351,7 @@ class TestIOCModels:
             session.commit()
 
             # Then create translation
-            translation = Translation(
+            translation = IOCTranslation(
                 avibase_id="TEST123",
                 language_code="es",
                 common_name="Especie de Prueba",
@@ -365,7 +360,7 @@ class TestIOCModels:
             session.commit()
 
             retrieved = session.execute(
-                select(Translation).where(Translation.avibase_id == "TEST123")
+                select(IOCTranslation).where(IOCTranslation.avibase_id == "TEST123")
             ).scalar_one()
 
             assert retrieved.language_code == "es"
@@ -374,10 +369,10 @@ class TestIOCModels:
     def test_species_unique_constraint(self, temp_db):
         """Test that avibase_id is unique in Species table."""
         engine = create_engine(f"sqlite:///{temp_db}")
-        Base.metadata.create_all(engine)
+        SQLModel.metadata.create_all(engine)
 
         with Session(engine) as session:
-            species1 = Species(
+            species1 = IOCSpecies(
                 avibase_id="TEST123",
                 scientific_name="Test species",
                 english_name="Test Species",
@@ -390,7 +385,7 @@ class TestIOCModels:
             session.commit()
 
             # Try to add duplicate
-            species2 = Species(
+            species2 = IOCSpecies(
                 avibase_id="TEST123",  # Same ID
                 scientific_name="Different species",
                 english_name="Different Species",
@@ -403,3 +398,116 @@ class TestIOCModels:
 
             with pytest.raises(IntegrityError):  # Should raise integrity error
                 session.commit()
+
+
+class TestIOCDatabaseBuilderIntegration:
+    """Integration tests for XML/XLSX file processing."""
+
+    @pytest.fixture
+    def sample_xml_file(self):
+        """Path to sample IOC XML file."""
+        return Path(__file__).parent / "fixtures" / "sample_ioc.xml"
+
+    @pytest.fixture
+    def sample_xlsx_file(self):
+        """Path to sample IOC XLSX file."""
+        return Path(__file__).parent / "fixtures" / "sample_ioc_multilingual.xlsx"
+
+    @pytest.fixture
+    def sample_avilistr_file(self):
+        """Path to sample Avibase mapping CSV file."""
+        return Path(__file__).parent / "fixtures" / "sample_avilistr.csv"
+
+    def test_populate_from_xml_only(self, temp_db, sample_xml_file, sample_avilistr_file):
+        """Test populating database from XML file only."""
+        builder = IOCDatabaseBuilder(db_path=temp_db)
+        builder.populate_from_files(xml_file=sample_xml_file, avilistr_csv=sample_avilistr_file)
+
+        # Verify species were inserted
+        engine = create_engine(f"sqlite:///{temp_db}")
+        with Session(engine) as session:
+            species = session.execute(select(IOCSpecies)).scalars().all()
+            assert len(species) == 3  # Struthio camelus, S. molybdophanes, Anas platyrhynchos
+
+            # Check specific species
+            scientific_names = [s.scientific_name for s in species]
+            assert "Struthio camelus" in scientific_names
+            assert "Struthio molybdophanes" in scientific_names
+            assert "Anas platyrhynchos" in scientific_names
+
+            # Check English names
+            ostrich = [s for s in species if s.scientific_name == "Struthio camelus"][0]
+            assert ostrich.english_name == "Common Ostrich"
+            assert ostrich.order == "STRUTHIONIFORMES"
+            assert ostrich.family == "Struthionidae"
+
+    def test_populate_from_xml_and_xlsx(
+        self, temp_db, sample_xml_file, sample_xlsx_file, sample_avilistr_file
+    ):
+        """Test populating database from both XML and XLSX files."""
+        builder = IOCDatabaseBuilder(db_path=temp_db)
+        builder.populate_from_files(
+            xml_file=sample_xml_file,
+            avilistr_csv=sample_avilistr_file,
+            xlsx_file=sample_xlsx_file,
+        )
+
+        engine = create_engine(f"sqlite:///{temp_db}")
+        with Session(engine) as session:
+            # Verify species
+            species = session.execute(select(IOCSpecies)).scalars().all()
+            assert len(species) == 3
+
+            # Verify translations
+            translations = session.execute(select(IOCTranslation)).scalars().all()
+            assert len(translations) == 9  # 3 species × 3 languages (Spanish, French, German)
+
+            # Check specific translations
+            spanish = [t for t in translations if t.language_code == "es"]
+            assert len(spanish) == 3
+            assert any(t.common_name == "Avestruz Común" for t in spanish)
+
+            french = [t for t in translations if t.language_code == "fr"]
+            assert len(french) == 3
+            assert any(t.common_name == "Autruche d'Afrique" for t in french)
+
+            german = [t for t in translations if t.language_code == "de"]
+            assert len(german) == 3
+            assert any(t.common_name == "Afrikanischer Strauß" for t in german)
+
+    def test_populate_metadata(self, temp_db, sample_xml_file, sample_avilistr_file):
+        """Test that metadata is populated correctly."""
+        builder = IOCDatabaseBuilder(db_path=temp_db)
+        builder.populate_from_files(xml_file=sample_xml_file, avilistr_csv=sample_avilistr_file)
+
+        # Check metadata was stored
+        engine = create_engine(f"sqlite:///{temp_db}")
+        with Session(engine) as session:
+            # Get IOC version from metadata
+            version = session.execute(
+                text("SELECT value FROM metadata WHERE key = 'ioc_version'")
+            ).scalar()
+            assert version == "15.1"
+
+            # Get species count
+            species_count = session.execute(
+                text("SELECT value FROM metadata WHERE key = 'species_count'")
+            ).scalar()
+            assert species_count == "3"
+
+    def test_populate_creates_indexes(self, temp_db, sample_xml_file, sample_avilistr_file):
+        """Test that performance indexes are created."""
+        builder = IOCDatabaseBuilder(db_path=temp_db)
+        builder.populate_from_files(xml_file=sample_xml_file, avilistr_csv=sample_avilistr_file)
+
+        engine = create_engine(f"sqlite:///{temp_db}")
+        with Session(engine) as session:
+            # Query for indexes
+            indexes = session.execute(
+                text("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='species'")
+            ).fetchall()
+
+            index_names = [idx[0] for idx in indexes]
+            assert "idx_species_family" in index_names
+            assert "idx_species_genus" in index_names
+            assert "idx_species_english_name" in index_names

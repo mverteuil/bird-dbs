@@ -1,4 +1,4 @@
-scientific_name,avibase_id,ioc_scientific_name,clements_scientific_name,english_name
-Struthio camelus,ABC123DEF456,Struthio camelus,Struthio camelus,Common Ostrich
-Struthio molybdophanes,GHI789JKL012,Struthio molybdophanes,Struthio molybdophanes,Somali Ostrich
-Turdus migratorius,MNO345PQR678,Turdus migratorius,Turdus migratorius,American Robin
+ioc_scientific_name,avibase_id
+Struthio camelus,1234ABCD
+Struthio molybdophanes,5678EFGH
+Anas platyrhynchos,9012IJKL

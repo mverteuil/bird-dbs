@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<list version="15.1">
+  <order>
+    <latin_name>STRUTHIONIFORMES</latin_name>
+    <family>
+      <latin_name>Struthionidae</latin_name>
+      <genus>
+        <latin_name>Struthio</latin_name>
+        <authority>Linnaeus, 1758</authority>
+        <species>
+          <latin_name>camelus</latin_name>
+          <english_name>Common Ostrich</english_name>
+          <authority>Linnaeus, 1758</authority>
+          <breeding_regions>AF</breeding_regions>
+          <breeding_subregions>n,e,s</breeding_subregions>
+        </species>
+        <species>
+          <latin_name>molybdophanes</latin_name>
+          <english_name>Somali Ostrich</english_name>
+          <authority>Reichenow, 1883</authority>
+          <breeding_regions>AF</breeding_regions>
+          <breeding_subregions>ne</breeding_subregions>
+        </species>
+      </genus>
+    </family>
+  </order>
+  <order>
+    <latin_name>ANSERIFORMES</latin_name>
+    <family>
+      <latin_name>Anatidae</latin_name>
+      <genus>
+        <latin_name>Anas</latin_name>
+        <species>
+          <latin_name>platyrhynchos</latin_name>
+          <english_name>Mallard</english_name>
+          <authority>Linnaeus, 1758</authority>
+          <breeding_regions>NA,EU,OR</breeding_regions>
+          <breeding_subregions>widespread</breeding_subregions>
+        </species>
+      </genus>
+    </family>
+  </order>
+</list>

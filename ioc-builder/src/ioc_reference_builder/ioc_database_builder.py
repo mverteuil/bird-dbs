@@ -19,19 +19,22 @@ from typing import TYPE_CHECKING, Any
 import openpyxl
 
 if TYPE_CHECKING:
+    import pandas as pd
     from openpyxl.worksheet.worksheet import Worksheet
-from birdnetpi.utils.ioc_models import (
+
+from sqlalchemy import create_engine, delete, text
+from sqlalchemy.orm import Session, sessionmaker
+from sqlmodel import SQLModel
+
+from ioc_reference_builder.ioc_models import (
     IOCLanguage,
     IOCMetadata,
     IOCSpecies,
     IOCTranslation,
 )
-from sqlalchemy import create_engine, delete, text
-from sqlalchemy.orm import Session, sessionmaker
-from sqlmodel import SQLModel
 
 
-class IocDatabaseBuilder:
+class IOCDatabaseBuilder:
     """Builder for IOC World Bird Names SQLite databases."""
 
     def __init__(self, db_path: Path | str):
@@ -62,18 +65,26 @@ class IocDatabaseBuilder:
     def populate_from_files(
         self,
         xml_file: Path,
+        avilistr_csv: Path,
         xlsx_file: Path | None = None,
     ) -> None:
-        """Populate database from IOC XML and optionally XLSX files.
+        """Populate database from IOC XML and Avibase mapping files.
 
         Args:
             xml_file: Path to IOC XML file (required)
+            avilistr_csv: Path to Avibase mapping CSV (required)
             xlsx_file: Path to IOC multilingual XLSX file (optional)
         """
         if not xml_file.exists():
             raise FileNotFoundError(f"XML file not found: {xml_file}")
+        if not avilistr_csv.exists():
+            raise FileNotFoundError(f"Avibase mapping file not found: {avilistr_csv}")
 
         print(f"Processing IOC XML: {xml_file}")
+        print(f"Loading Avibase mapping: {avilistr_csv}")
+
+        # Load Avibase mapping
+        avibase_lookup = self._load_avibase_mapping(avilistr_csv)
 
         # Clear existing data
         with self.get_db() as session:
@@ -84,14 +95,16 @@ class IocDatabaseBuilder:
             session.commit()
 
         # Stream XML data directly to database
-        species_count = self._stream_xml_to_database(xml_file)
+        species_count = self._stream_xml_to_database(xml_file, avibase_lookup)
 
         # Stream XLSX translations if provided
         translation_count = 0
         language_counts = {}
         if xlsx_file and xlsx_file.exists():
             print(f"Processing translations: {xlsx_file}")
-            translation_count, language_counts = self._stream_xlsx_to_database(xlsx_file)
+            translation_count, language_counts = self._stream_xlsx_to_database(
+                xlsx_file, avibase_lookup
+            )
 
         # Store metadata
         self._store_metadata(species_count, translation_count, language_counts)
@@ -101,11 +114,34 @@ class IocDatabaseBuilder:
 
         print(f"Database populated: {species_count} species, {translation_count} translations")
 
-    def _stream_xml_to_database(self, xml_file: Path) -> int:
+    def _load_avibase_mapping(self, avilistr_csv: Path) -> dict[str, str]:
+        """Load Avibase ID mapping from CSV file.
+
+        Args:
+            avilistr_csv: Path to Avibase mapping CSV file
+
+        Returns:
+            Dictionary mapping scientific_name (lowercase) to avibase_id
+        """
+        import pandas as pd
+
+        avilistr_data = pd.read_csv(avilistr_csv)
+        avibase_lookup = {}
+
+        for _, row in avilistr_data.iterrows():
+            ioc_name = str(row["ioc_scientific_name"]).strip().lower()
+            avibase_id = str(row["avibase_id"]).strip()
+            avibase_lookup[ioc_name] = avibase_id
+
+        print(f"  Loaded {len(avibase_lookup)} Avibase ID mappings")
+        return avibase_lookup
+
+    def _stream_xml_to_database(self, xml_file: Path, avibase_lookup: dict[str, str]) -> int:
         """Stream species data from IOC XML file directly to database.
 
         Args:
             xml_file: Path to IOC XML file
+            avibase_lookup: Dictionary mapping scientific_name to avibase_id
 
         Returns:
             Number of species inserted
@@ -159,14 +195,21 @@ class IocDatabaseBuilder:
                                 scientific_name = f"{genus_name} {species_epithet}"
                                 authority = species_authority or genus_authority
 
+                                # Look up Avibase ID
+                                avibase_id = avibase_lookup.get(scientific_name.lower())
+                                if not avibase_id:
+                                    # Skip species without Avibase ID mapping
+                                    continue
+
                                 species_batch.append(
                                     {
+                                        "avibase_id": avibase_id,
                                         "scientific_name": scientific_name,
                                         "english_name": english_name,
-                                        "order_name": order_name,
+                                        "order": order_name,
                                         "family": family_latin,
                                         "genus": genus_name,
-                                        "species_epithet": species_epithet,
+                                        "species": species_epithet,
                                         "authority": authority,
                                         "breeding_regions": breeding_regions,
                                         "breeding_subregions": breeding_subregions,
@@ -192,11 +235,14 @@ class IocDatabaseBuilder:
 
         return species_count
 
-    def _stream_xlsx_to_database(self, xlsx_file: Path) -> tuple[int, dict[str, int]]:
+    def _stream_xlsx_to_database(
+        self, xlsx_file: Path, avibase_lookup: dict[str, str]
+    ) -> tuple[int, dict[str, int]]:
         """Stream multilingual translations from XLSX directly to database.
 
         Args:
             xlsx_file: Path to IOC multilingual XLSX file
+            avibase_lookup: Dictionary mapping scientific_name to avibase_id
 
         Returns:
             Tuple of (total translation count, language counts dict)
@@ -217,7 +263,7 @@ class IocDatabaseBuilder:
 
             # Stream translations
             translation_count, language_counts = self._process_xlsx_rows(
-                ws, ioc_col_idx, lang_columns, session
+                ws, ioc_col_idx, lang_columns, avibase_lookup, session
             )
 
             # Insert language metadata
@@ -270,6 +316,7 @@ class IocDatabaseBuilder:
         worksheet: "Worksheet",
         ioc_col_idx: int,
         lang_columns: dict[str, int],
+        avibase_lookup: dict[str, str],
         session: Session,
     ) -> tuple[int, dict[str, int]]:
         """Process XLSX rows and insert translations in batches."""
@@ -284,6 +331,12 @@ class IocDatabaseBuilder:
 
             scientific_name = str(row[ioc_col_idx]).strip()
 
+            # Look up Avibase ID
+            avibase_id = avibase_lookup.get(scientific_name.lower())
+            if not avibase_id:
+                # Skip species without Avibase ID mapping
+                continue
+
             # Extract translations for each language
             for lang_code, col_idx in lang_columns.items():
                 if col_idx < len(row) and row[col_idx]:
@@ -291,7 +344,7 @@ class IocDatabaseBuilder:
                     if translated_name:
                         translation_batch.append(
                             {
-                                "scientific_name": scientific_name,
+                                "avibase_id": avibase_id,
                                 "language_code": lang_code,
                                 "common_name": translated_name,
                             }
@@ -370,7 +423,7 @@ class IocDatabaseBuilder:
             session.execute(
                 text("""
                 CREATE INDEX IF NOT EXISTS idx_species_order_family
-                ON species(order_name, family)
+                ON species("order", family)
             """)
             )
 
@@ -384,8 +437,8 @@ class IocDatabaseBuilder:
             # Indexes for translations table
             session.execute(
                 text("""
-                CREATE INDEX IF NOT EXISTS idx_translations_scientific_language
-                ON translations(scientific_name, language_code)
+                CREATE INDEX IF NOT EXISTS idx_translations_avibase_language
+                ON translations(avibase_id, language_code)
             """)
             )
 
@@ -461,6 +514,169 @@ class IocDatabaseBuilder:
             "sv": "Swedish",
             "tr": "Turkish",
             "uk": "Ukrainian",
+        }
+
+    def _parse_species_data(self, species_df: "pd.DataFrame") -> list[dict[str, str]]:
+        """Parse species data from pandas DataFrame.
+
+        Args:
+            species_df: DataFrame with columns: Order, Family, Genus, Species, English name, Authority
+
+        Returns:
+            List of species dictionaries
+        """
+
+        species_list = []
+        for _, row in species_df.iterrows():
+            genus = str(row["Genus"]).strip()
+            species_epithet = str(row["Species"]).strip()
+            scientific_name = f"{genus} {species_epithet}"
+
+            species_list.append(
+                {
+                    "scientific_name": scientific_name,
+                    "english_name": str(row["English name"]).strip(),
+                    "order": str(row["Order"]).strip(),
+                    "family": str(row["Family"]).strip(),
+                    "genus": genus,
+                    "species": species_epithet,
+                    "authority": (
+                        str(row.get("Authority", "")).strip()
+                        if row.get("Authority") is not None and str(row.get("Authority")).strip()
+                        else None
+                    ),
+                }
+            )
+        return species_list
+
+    def _parse_multilingual_data(self, translations_df: "pd.DataFrame") -> list[dict[str, str]]:
+        """Parse multilingual translation data from pandas DataFrame.
+
+        Args:
+            translations_df: DataFrame with columns: Scientific name, LanguageCode, CommonName
+
+        Returns:
+            List of translation dictionaries
+        """
+        translations = []
+        for _, row in translations_df.iterrows():
+            common_name = str(row["CommonName"]).strip()
+            language_code = str(row["LanguageCode"]).strip().lower()
+
+            # Skip empty translations
+            if not common_name:
+                continue
+
+            translations.append(
+                {
+                    "scientific_name": str(row["Scientific name"]).strip(),
+                    "language_code": language_code,
+                    "common_name": common_name,
+                }
+            )
+        return translations
+
+    def _map_avibase_ids(
+        self, species_list: list[dict[str, str]], avilistr_data: "pd.DataFrame"
+    ) -> list[dict[str, str]]:
+        """Map Avibase IDs to species using Avilistr reference data.
+
+        Args:
+            species_list: List of species dictionaries
+            avilistr_data: DataFrame with columns: scientific_name, avibase_id, ioc_scientific_name
+
+        Returns:
+            List of species dictionaries with avibase_id added
+        """
+        # Create lookup dict with case-insensitive keys
+        avibase_lookup = {}
+        for _, row in avilistr_data.iterrows():
+            ioc_name = str(row["ioc_scientific_name"]).strip().lower()
+            avibase_id = str(row["avibase_id"]).strip()
+            avibase_lookup[ioc_name] = avibase_id
+
+        # Map Avibase IDs to species
+        mapped_species = []
+        for species in species_list:
+            scientific_name_lower = species["scientific_name"].lower()
+            if scientific_name_lower in avibase_lookup:
+                species_with_id = species.copy()
+                species_with_id["avibase_id"] = avibase_lookup[scientific_name_lower]
+                mapped_species.append(species_with_id)
+
+        return mapped_species
+
+    def _insert_species(self, species_list: list[dict[str, str]]) -> None:
+        """Insert species into database.
+
+        Args:
+            species_list: List of species dictionaries with avibase_id
+        """
+        with self.get_db() as session:
+            for species_data in species_list:
+                # Check if species already exists
+                existing = session.execute(
+                    text("SELECT avibase_id FROM species WHERE avibase_id = :avibase_id"),
+                    {"avibase_id": species_data["avibase_id"]},
+                ).fetchone()
+
+                if not existing:
+                    species = IOCSpecies(**species_data)
+                    session.add(species)
+
+            session.commit()
+
+    def _insert_translations(
+        self, translations: list[dict[str, str]], avilistr_data: "pd.DataFrame"
+    ) -> None:
+        """Insert translations into database.
+
+        Args:
+            translations: List of translation dictionaries
+            avilistr_data: DataFrame with Avibase ID mappings
+        """
+        # Create lookup dict with case-insensitive keys
+        avibase_lookup = {}
+        for _, row in avilistr_data.iterrows():
+            ioc_name = str(row["ioc_scientific_name"]).strip().lower()
+            avibase_id = str(row["avibase_id"]).strip()
+            avibase_lookup[ioc_name] = avibase_id
+
+        with self.get_db() as session:
+            for trans_data in translations:
+                scientific_name_lower = trans_data["scientific_name"].lower()
+                if scientific_name_lower in avibase_lookup:
+                    translation = IOCTranslation(
+                        avibase_id=avibase_lookup[scientific_name_lower],
+                        language_code=trans_data["language_code"],
+                        common_name=trans_data["common_name"],
+                    )
+                    session.add(translation)
+
+            session.commit()
+
+    def get_statistics(self) -> dict[str, int]:
+        """Get database statistics.
+
+        Returns:
+            Dictionary with species_count, translation_count, and language_count
+        """
+        with self.get_db() as session:
+            species_count = session.execute(text("SELECT COUNT(*) FROM species")).scalar() or 0
+            translation_count = (
+                session.execute(text("SELECT COUNT(*) FROM translations")).scalar() or 0
+            )
+            language_count = (
+                session.execute(
+                    text("SELECT COUNT(DISTINCT language_code) FROM translations")
+                ).scalar()
+                or 0
+            )
+
+        return {
+            "species_count": species_count,
+            "translation_count": translation_count,
+            "language_count": language_count,
         }
 
     # Query methods removed - use SpeciesDatabaseService for runtime queries
