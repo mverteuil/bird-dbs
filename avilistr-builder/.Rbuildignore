@@ -1,0 +1,10 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.git$
+^\.github$
+^\.lintr$
+^\.pre-commit-config\.yaml$
+^Makefile$
+^README\.md$
+^output$
+^\.coverage$

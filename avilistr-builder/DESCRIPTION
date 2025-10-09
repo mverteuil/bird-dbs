@@ -1,0 +1,25 @@
+Package: avilistBuilder
+Title: Avibase ID Mapping Extractor
+Version: 0.1.0
+Authors@R: person("BirdNET-Pi", "Contributors", 
+                  email = "contact@birdnetpi.org", 
+                  role = c("aut", "cre"))
+Description: Extracts Avibase ID mappings from the avilistr R package and 
+    exports to CSV format for use by other BirdNET-Pi extractors. Provides
+    the critical link between IOC scientific names and stable Avibase IDs.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.0.0
+Imports:
+    avilistr,
+    dplyr,
+    readr,
+    tibble
+Suggests:
+    testthat (>= 3.0.0),
+    covr,
+    lintr,
+    styler
+Config/testthat/edition: 3

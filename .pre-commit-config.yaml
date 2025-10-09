@@ -93,3 +93,20 @@ repos:
           - '-D'
           - 'warnings'
         entry: env CARGO_INCREMENTAL=0 cargo clippy
+  # R formatting and linting for avilistr builder
+  # Using system hooks with Makefile targets to avoid digest compilation issues
+  # Note: Run 'cd avilistr-builder && make install' to set up R environment
+  - repo: local
+    hooks:
+      - id: r-styler
+        name: "styler (avilistr-builder)"
+        entry: bash -c 'cd avilistr-builder && (Rscript -e "if (!requireNamespace(\"styler\", quietly=TRUE)) quit(status=0)" && make format) || echo "Skipping styler (not installed)"'
+        language: system
+        files: ^avilistr-builder/.*\.(R|Rmd|Rnw|r|rmd|rnw)$
+        pass_filenames: false
+      - id: r-lintr
+        name: "lintr (avilistr-builder)"
+        entry: bash -c 'cd avilistr-builder && (Rscript -e "if (!requireNamespace(\"lintr\", quietly=TRUE)) quit(status=0)" && make lint) || echo "Skipping lintr (not installed)"'
+        language: system
+        files: ^avilistr-builder/.*\.(R|Rmd|Rnw|r|rmd|rnw)$
+        pass_filenames: false

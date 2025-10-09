@@ -1,0 +1,12 @@
+linters: linters_with_defaults(
+    line_length_linter(120),
+    object_name_linter = NULL,  # Allow snake_case function names
+    cyclocomp_linter = NULL     # Disable cyclomatic complexity checks for now
+  )
+exclusions: list(
+    "tests/testthat.R",
+    "tests/testthat/test-*.R" = list(
+      object_usage_linter = Inf  # Allow test-specific usage patterns
+    )
+  )
+encoding: "UTF-8"
