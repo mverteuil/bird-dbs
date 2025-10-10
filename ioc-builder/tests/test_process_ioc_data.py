@@ -179,3 +179,132 @@ class TestDownloadCommand:
 
             # Check that file size is reported
             assert "1.00 MB" in result.output
+
+
+class TestDownloadCommandErrorPaths:
+    """Tests for download command error handling."""
+
+    @pytest.fixture
+    def runner(self):
+        """Create CLI test runner."""
+        return CliRunner()
+
+    def test_download_with_connection_timeout(self, runner, mocker):
+        """Should handle connection timeouts gracefully."""
+        mocker.patch(
+            "ioc_reference_builder.process_ioc_data.requests.get",
+            side_effect=requests.exceptions.Timeout("Connection timed out"),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(cli, ["download", "--version", "15.1", "--output-dir", tmpdir])
+
+            # Should exit with error
+            assert result.exit_code == 1
+            assert "timed out" in result.output.lower() or "timeout" in result.output.lower()
+
+    def test_download_with_connection_error(self, runner, mocker):
+        """Should handle connection refused errors."""
+        mocker.patch(
+            "ioc_reference_builder.process_ioc_data.requests.get",
+            side_effect=requests.exceptions.ConnectionError("Connection refused"),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(cli, ["download", "--version", "15.1", "--output-dir", tmpdir])
+
+            # Should exit with error
+            assert result.exit_code == 1
+            assert "connection" in result.output.lower() or "failed" in result.output.lower()
+
+    def test_download_with_ssl_error(self, runner, mocker):
+        """Should handle SSL certificate errors."""
+        mocker.patch(
+            "ioc_reference_builder.process_ioc_data.requests.get",
+            side_effect=requests.exceptions.SSLError("SSL certificate verify failed"),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(cli, ["download", "--version", "15.1", "--output-dir", tmpdir])
+
+            # Should exit with error
+            assert result.exit_code == 1
+            assert (
+                "ssl" in result.output.lower()
+                or "certificate" in result.output.lower()
+                or "failed" in result.output.lower()
+            )
+
+    def test_download_with_http_429_rate_limit(self, runner, mocker, http_response_factory):
+        """Should handle HTTP 429 rate limiting."""
+        mocker.patch(
+            "ioc_reference_builder.process_ioc_data.requests.get",
+            return_value=http_response_factory(
+                status_code=429,
+                raise_for_status_error=requests.exceptions.HTTPError("429 Too Many Requests"),
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(cli, ["download", "--version", "15.1", "--output-dir", tmpdir])
+
+            # Should exit with error
+            assert result.exit_code == 1
+            assert "failed" in result.output.lower()
+
+    def test_download_with_http_503_service_unavailable(
+        self, runner, mocker, http_response_factory
+    ):
+        """Should handle HTTP 503 service unavailable."""
+        mocker.patch(
+            "ioc_reference_builder.process_ioc_data.requests.get",
+            return_value=http_response_factory(
+                status_code=503,
+                raise_for_status_error=requests.exceptions.HTTPError("503 Service Unavailable"),
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(cli, ["download", "--version", "15.1", "--output-dir", tmpdir])
+
+            # Should exit with error
+            assert result.exit_code == 1
+            assert "failed" in result.output.lower()
+
+    def test_download_with_invalid_response_content(self, runner, mocker, http_response_factory):
+        """Should handle corrupted/invalid file content."""
+        # Return valid HTTP but corrupted file content
+        mocker.patch(
+            "ioc_reference_builder.process_ioc_data.requests.get",
+            return_value=http_response_factory(content=b"Not a real XLSX/XML file"),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(cli, ["download", "--version", "15.1", "--output-dir", tmpdir])
+
+            # Should complete download (corruption detected during processing, not download)
+            assert result.exit_code == 0
+            assert "Downloaded" in result.output
+
+    def test_download_with_permission_denied(self, runner, mocker, http_response_factory):
+        """Should handle permission denied errors."""
+        mocker.patch(
+            "ioc_reference_builder.process_ioc_data.requests.get",
+            return_value=http_response_factory(),
+        )
+
+        # Mock mkdir to raise permission error
+        def mock_mkdir(self, parents=False, exist_ok=False):
+            raise PermissionError("[Errno 13] Permission denied")
+
+        mocker.patch.object(Path, "mkdir", mock_mkdir)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "protected"
+            result = runner.invoke(
+                cli,
+                ["download", "--version", "15.1", "--output-dir", str(output_dir)],
+            )
+
+            # Should exit with error
+            assert result.exit_code == 1

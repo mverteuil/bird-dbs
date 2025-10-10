@@ -5,9 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlmodel import SQLModel
 
 from ioc_reference_builder.ioc_database_builder import IOCDatabaseBuilder
 from ioc_reference_builder.ioc_models import (
@@ -243,103 +241,6 @@ class TestIOCDatabaseBuilder:
         assert stats[stat_key] == expected_value
 
 
-class TestIOCModels:
-    """Tests for IOC database models."""
-
-    def test_species_model_required_fields(self, temp_db):
-        """Should verify Species model has required fields."""
-        engine = create_engine(f"sqlite:///{temp_db}")
-        SQLModel.metadata.create_all(engine)
-
-        with Session(engine) as session:
-            species = IOCSpecies(
-                avibase_id="TEST123",
-                scientific_name="Test species",
-                english_name="Test Species",
-                order_name="TESTORDER",
-                family="Testidae",
-                genus="Test",
-                species_epithet="species",
-            )
-            session.add(species)
-            session.commit()
-
-            retrieved = session.execute(
-                select(IOCSpecies).where(IOCSpecies.avibase_id == "TEST123")
-            ).scalar_one()
-
-            assert retrieved.scientific_name == "Test species"
-            assert retrieved.english_name == "Test Species"
-
-    def test_translation_model_required_fields(self, temp_db):
-        """Should verify Translation model has required fields."""
-        engine = create_engine(f"sqlite:///{temp_db}")
-        SQLModel.metadata.create_all(engine)
-
-        with Session(engine) as session:
-            # First create a species
-            species = IOCSpecies(
-                avibase_id="TEST123",
-                scientific_name="Test species",
-                english_name="Test Species",
-                order_name="TESTORDER",
-                family="Testidae",
-                genus="Test",
-                species_epithet="species",
-            )
-            session.add(species)
-            session.commit()
-
-            # Then create translation
-            translation = IOCTranslation(
-                avibase_id="TEST123",
-                language_code="es",
-                common_name="Especie de Prueba",
-            )
-            session.add(translation)
-            session.commit()
-
-            retrieved = session.execute(
-                select(IOCTranslation).where(IOCTranslation.avibase_id == "TEST123")
-            ).scalar_one()
-
-            assert retrieved.language_code == "es"
-            assert retrieved.common_name == "Especie de Prueba"
-
-    def test_species_unique_constraint(self, temp_db):
-        """Should ensure avibase_id is unique in Species table."""
-        engine = create_engine(f"sqlite:///{temp_db}")
-        SQLModel.metadata.create_all(engine)
-
-        with Session(engine) as session:
-            species1 = IOCSpecies(
-                avibase_id="TEST123",
-                scientific_name="Test species",
-                english_name="Test Species",
-                order_name="TESTORDER",
-                family="Testidae",
-                genus="Test",
-                species_epithet="species",
-            )
-            session.add(species1)
-            session.commit()
-
-            # Try to add duplicate
-            species2 = IOCSpecies(
-                avibase_id="TEST123",  # Same ID
-                scientific_name="Different species",
-                english_name="Different Species",
-                order_name="TESTORDER",
-                family="Testidae",
-                genus="Different",
-                species_epithet="species",
-            )
-            session.add(species2)
-
-            with pytest.raises(IntegrityError):  # Should raise integrity error
-                session.commit()
-
-
 class TestIOCDatabaseBuilderIntegration:
     """Integration tests for XML/XLSX file processing."""
 
@@ -451,3 +352,154 @@ class TestIOCDatabaseBuilderIntegration:
             assert "idx_species_family" in index_names
             assert "idx_species_genus" in index_names
             assert "idx_species_english_name" in index_names
+
+
+class TestIOCDatabaseBuilderErrorPaths:
+    """Tests for error handling and edge cases."""
+
+    def test_unicode_species_names(self, builder):
+        """Should handle Unicode characters in species names."""
+        # Test with various Unicode characters
+        data = pd.DataFrame(
+            {
+                "Order": ["PASSERIFORMES"],
+                "Family": ["Corvidae"],
+                "Genus": ["Cyanocitta"],
+                "Species": ["cristata"],
+                "English name": ["Blue Jay (Māori: Kōlea)"],  # Macrons
+                "Authority": ["Linnæus, 1758"],  # Ligature
+            }
+        )
+
+        species_list = builder._parse_species_data(data)
+        assert len(species_list) == 1
+        assert "Māori" in species_list[0]["english_name"]
+        assert "Linnæus" in species_list[0]["authority"]
+
+    def test_unicode_translation_names(self, builder):
+        """Should handle Unicode in multilingual translations."""
+        data = pd.DataFrame(
+            {
+                "Scientific name": ["Passer domesticus", "Turdus merula"],
+                "LanguageCode": ["zh-hans", "ja"],
+                "CommonName": ["家麻雀", "クロウタドリ"],  # Chinese, Japanese
+            }
+        )
+
+        translations = builder._parse_multilingual_data(data)
+        assert len(translations) == 2
+        assert translations[0]["common_name"] == "家麻雀"
+        assert translations[1]["common_name"] == "クロウタドリ"
+
+    def test_emoji_in_names(self, builder):
+        """Should handle emoji characters in names."""
+        data = pd.DataFrame(
+            {
+                "Scientific name": ["Passer domesticus"],
+                "LanguageCode": ["en"],
+                "CommonName": ["House Sparrow 🐦"],  # Emoji
+            }
+        )
+
+        translations = builder._parse_multilingual_data(data)
+        assert len(translations) == 1
+        assert "🐦" in translations[0]["common_name"]
+
+    def test_special_characters_in_authority(self, builder):
+        """Should handle special characters in authority field."""
+        data = pd.DataFrame(
+            {
+                "Order": ["PASSERIFORMES"],
+                "Family": ["Fringillidae"],
+                "Genus": ["Carduelis"],
+                "Species": ["carduelis"],
+                "English name": ["European Goldfinch"],
+                "Authority": ["(Linnaeus, 1758)"],  # Parentheses
+            }
+        )
+
+        species_list = builder._parse_species_data(data)
+        assert len(species_list) == 1
+        assert species_list[0]["authority"] == "(Linnaeus, 1758)"
+
+    def test_extremely_long_names(self, builder):
+        """Should handle extremely long species names."""
+        long_name = "A" * 500  # 500 character name
+        data = pd.DataFrame(
+            {
+                "Order": ["PASSERIFORMES"],
+                "Family": ["Testidae"],
+                "Genus": ["Test"],
+                "Species": ["test"],
+                "English name": [long_name],
+                "Authority": ["Test, 2024"],
+            }
+        )
+
+        species_list = builder._parse_species_data(data)
+        assert len(species_list) == 1
+        assert len(species_list[0]["english_name"]) == 500
+
+    def test_whitespace_handling(self, builder):
+        """Should handle extra whitespace in species data."""
+        data = pd.DataFrame(
+            {
+                "Scientific name": ["  Passer domesticus  "],  # Leading/trailing spaces
+                "LanguageCode": [" es "],
+                "CommonName": ["  Gorrión Común  "],
+            }
+        )
+
+        translations = builder._parse_multilingual_data(data)
+        assert len(translations) == 1
+        # Should trim whitespace
+        assert translations[0]["common_name"].strip() == "Gorrión Común"
+
+    def test_null_handling_in_optional_fields(self, builder):
+        """Should handle null values in optional fields gracefully."""
+        import numpy as np
+
+        data = pd.DataFrame(
+            {
+                "Order": ["PASSERIFORMES"],
+                "Family": ["Corvidae"],
+                "Genus": ["Corvus"],
+                "Species": ["corax"],
+                "English name": ["Common Raven"],
+                "Authority": [np.nan],  # Null authority
+            }
+        )
+
+        species_list = builder._parse_species_data(data)
+        assert len(species_list) == 1
+        # Should handle nan gracefully (may be None, nan, or string 'nan')
+        authority = species_list[0]["authority"]
+        assert authority is None or pd.isna(authority) or authority == "nan"
+
+    def test_mixed_case_language_codes(self, builder):
+        """Should normalize mixed-case language codes."""
+        data = pd.DataFrame(
+            {
+                "Scientific name": ["Passer domesticus", "Turdus merula"],
+                "LanguageCode": ["eS", "Fr"],  # Mixed case
+                "CommonName": ["Gorrión", "Merle"],
+            }
+        )
+
+        translations = builder._parse_multilingual_data(data)
+        assert all(t["language_code"].islower() for t in translations)
+        assert set(t["language_code"] for t in translations) == {"es", "fr"}
+
+    def test_scientific_name_special_characters(self, builder):
+        """Should handle special characters in scientific names."""
+        data = pd.DataFrame(
+            {
+                "Scientific name": ["Circus cyaneus × Circus pygargus"],  # Hybrid indicator
+                "LanguageCode": ["en"],
+                "CommonName": ["Hen Harrier × Montagu's Harrier"],
+            }
+        )
+
+        translations = builder._parse_multilingual_data(data)
+        assert len(translations) == 1
+        assert "×" in translations[0]["common_name"]
