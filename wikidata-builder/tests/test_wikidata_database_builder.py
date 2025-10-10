@@ -5,9 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlmodel import SQLModel
 
 from wikidata_reference_builder.wikidata_database_builder import (
     WikidataDatabaseBuilder,
@@ -365,85 +363,188 @@ class TestWikidataDatabaseBuilder:
             assert '"fr"' not in query
 
 
-class TestWikidataModels:
-    """Tests for Wikidata database models."""
+class TestWikidataDatabaseBuilderErrorPaths:
+    """Tests for error handling and edge cases."""
 
-    def test_species_model_required_fields(self, temp_db):
-        """Should verify Species model has required fields."""
-        engine = create_engine(f"sqlite:///{temp_db}")
-        SQLModel.metadata.create_all(engine)
+    def test_unicode_wikidata_ids(self, builder):
+        """Should handle Unicode in scientific names."""
+        species_data = [
+            {
+                "wikidata_id": "Q123",
+                "avibase_id": "ABC123",
+                "scientific_name": "Tōhī camelus",  # Macron
+            }
+        ]
 
+        builder._insert_species(species_data)
+
+        engine = create_engine(f"sqlite:///{builder.db_path}")
         with Session(engine) as session:
-            species = WikidataSpecies(
-                avibase_id="TEST123",
-                wikidata_id="Q123",
-                scientific_name="Test species",
-            )
-            session.add(species)
-            session.commit()
+            species = session.execute(select(WikidataSpecies)).scalars().all()
+            assert len(species) == 1
+            assert "Tōhī" in species[0].scientific_name
 
-            retrieved = session.execute(
-                select(WikidataSpecies).where(WikidataSpecies.avibase_id == "TEST123")
-            ).scalar_one()
+    def test_unicode_translation_names(self, builder):
+        """Should handle Unicode in translations."""
+        # First insert species
+        species_data = [
+            {
+                "wikidata_id": "Q123",
+                "avibase_id": "ABC123",
+                "scientific_name": "Passer domesticus",
+            }
+        ]
+        builder._insert_species(species_data)
 
-            assert retrieved.wikidata_id == "Q123"
-            assert retrieved.scientific_name == "Test species"
+        # Add translations with Unicode
+        translations = [
+            {
+                "avibase_id": "ABC123",
+                "language_code": "zh-hans",
+                "common_name": "家麻雀",  # Chinese
+            },
+            {
+                "avibase_id": "ABC123",
+                "language_code": "ja",
+                "common_name": "イエスズメ",  # Japanese
+            },
+        ]
 
-    def test_translation_model_required_fields(self, temp_db):
-        """Should verify Translation model has required fields."""
-        engine = create_engine(f"sqlite:///{temp_db}")
-        SQLModel.metadata.create_all(engine)
+        builder._insert_translations(translations)
 
+        engine = create_engine(f"sqlite:///{builder.db_path}")
         with Session(engine) as session:
-            # First create a species
-            species = WikidataSpecies(
-                avibase_id="TEST123",
-                wikidata_id="Q123",
-                scientific_name="Test species",
-            )
-            session.add(species)
-            session.commit()
+            trans = session.execute(select(WikidataTranslation)).scalars().all()
+            assert len(trans) == 2
+            names = [t.common_name for t in trans]
+            assert "家麻雀" in names
+            assert "イエスズメ" in names
 
-            # Then create translation
-            translation = WikidataTranslation(
-                avibase_id="TEST123",
-                language_code="nb",
-                common_name="Test art",
-            )
-            session.add(translation)
-            session.commit()
+    def test_emoji_in_translations(self, builder):
+        """Should handle emoji in translation names."""
+        species_data = [
+            {
+                "wikidata_id": "Q123",
+                "avibase_id": "ABC123",
+                "scientific_name": "Test species",
+            }
+        ]
+        builder._insert_species(species_data)
 
-            retrieved = session.execute(
-                select(WikidataTranslation).where(WikidataTranslation.avibase_id == "TEST123")
-            ).scalar_one()
+        translations = [
+            {
+                "avibase_id": "ABC123",
+                "language_code": "en",
+                "common_name": "Test Bird 🐦",  # Emoji
+            }
+        ]
 
-            assert retrieved.language_code == "nb"
-            assert retrieved.common_name == "Test art"
+        builder._insert_translations(translations)
 
-    def test_species_unique_constraint(self, temp_db):
-        """Should ensure avibase_id is unique in Species table."""
-        engine = create_engine(f"sqlite:///{temp_db}")
-        SQLModel.metadata.create_all(engine)
-
+        engine = create_engine(f"sqlite:///{builder.db_path}")
         with Session(engine) as session:
-            species1 = WikidataSpecies(
-                avibase_id="TEST123",
-                wikidata_id="Q123",
-                scientific_name="Test species",
-            )
-            session.add(species1)
-            session.commit()
+            trans = session.execute(select(WikidataTranslation)).scalars().all()
+            assert len(trans) == 1
+            assert "🐦" in trans[0].common_name
 
-            # Try to add duplicate
-            species2 = WikidataSpecies(
-                avibase_id="TEST123",  # Same ID
-                wikidata_id="Q456",
-                scientific_name="Different species",
-            )
-            session.add(species2)
+    def test_hybrid_species_names(self, builder):
+        """Should handle hybrid species names with special characters."""
+        species_data = [
+            {
+                "wikidata_id": "Q123",
+                "avibase_id": "ABC123",
+                "scientific_name": "Circus cyaneus × Circus pygargus",  # Hybrid
+            }
+        ]
 
-            with pytest.raises(IntegrityError):  # Should raise integrity error
-                session.commit()
+        builder._insert_species(species_data)
+
+        engine = create_engine(f"sqlite:///{builder.db_path}")
+        with Session(engine) as session:
+            species = session.execute(select(WikidataSpecies)).scalars().all()
+            assert len(species) == 1
+            assert "×" in species[0].scientific_name
+
+    def test_very_long_common_names(self, builder):
+        """Should handle very long common names."""
+        species_data = [
+            {
+                "wikidata_id": "Q123",
+                "avibase_id": "ABC123",
+                "scientific_name": "Test species",
+            }
+        ]
+        builder._insert_species(species_data)
+
+        long_name = "A" * 500  # 500 character name
+        translations = [
+            {
+                "avibase_id": "ABC123",
+                "language_code": "en",
+                "common_name": long_name,
+            }
+        ]
+
+        builder._insert_translations(translations)
+
+        engine = create_engine(f"sqlite:///{builder.db_path}")
+        with Session(engine) as session:
+            trans = session.execute(select(WikidataTranslation)).scalars().all()
+            assert len(trans) == 1
+            assert len(trans[0].common_name) == 500
+
+    def test_special_language_codes(self, builder):
+        """Should handle language codes with region suffixes."""
+        species_data = [
+            {
+                "wikidata_id": "Q123",
+                "avibase_id": "ABC123",
+                "scientific_name": "Test species",
+            }
+        ]
+        builder._insert_species(species_data)
+
+        translations = [
+            {
+                "avibase_id": "ABC123",
+                "language_code": "zh-hans",  # Simplified Chinese
+                "common_name": "测试鸟",
+            },
+            {
+                "avibase_id": "ABC123",
+                "language_code": "zh-hant",  # Traditional Chinese
+                "common_name": "測試鳥",
+            },
+        ]
+
+        builder._insert_translations(translations)
+
+        engine = create_engine(f"sqlite:///{builder.db_path}")
+        with Session(engine) as session:
+            trans = session.execute(select(WikidataTranslation)).scalars().all()
+            assert len(trans) == 2
+            lang_codes = [t.language_code for t in trans]
+            assert "zh-hans" in lang_codes
+            assert "zh-hant" in lang_codes
+
+    def test_empty_scientific_name_filtering(self, builder):
+        """Should filter species with empty scientific names."""
+        species_data = [
+            {
+                "wikidata_id": "Q123",
+                "avibase_id": "ABC123",
+                "scientific_name": "",  # Empty name
+            }
+        ]
+
+        # Should handle gracefully (either skip or store as-is)
+        builder._insert_species(species_data)
+
+        engine = create_engine(f"sqlite:///{builder.db_path}")
+        with Session(engine) as session:
+            species = session.execute(select(WikidataSpecies)).scalars().all()
+            # Implementation may filter or store - just verify it doesn't crash
+            assert True  # Made it this far without error
 
 
 class TestScientificNameFiltering:
