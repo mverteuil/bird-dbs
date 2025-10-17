@@ -73,3 +73,61 @@ pub enum DeduplicationMode {
     SamplingEvent,
     None,
 }
+
+// Pack manifest structures (from pack-planner output)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PackManifest {
+    pub regions: Vec<RegionManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RegionManifest {
+    pub region_id: String,
+    pub release_name: String,
+    pub h3_cells: Vec<String>,
+    pub packs: Vec<Pack>,
+    pub size_mb: f64,
+    pub pack_count: usize,
+    pub center: Center,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Pack {
+    pub pack_id: String,
+    pub boundary_cell: String,
+    pub boundary_resolution: u8,
+    pub data_resolution: u8,
+    pub center_lat: f64,
+    pub center_lon: f64,
+    pub estimated_size_mb: f64,
+    pub total_checklists: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Center {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+// Density report structures (from ebird-density-analyzer output)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DensityReport {
+    pub resolution: u8,
+    pub cells: Vec<CellDensityData>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CellDensityData {
+    pub h3_cell: String,
+    pub center_lat: f64,
+    pub center_lon: f64,
+    pub unique_checklists: usize,
+    pub complete_checklists: usize,
+    pub total_observations: usize,
+    pub date_range_start: String,
+    pub date_range_end: String,
+    pub estimated_pack_size_mb: f64,
+    pub recommended_data_resolution: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_complete_checklists_sampled: Option<usize>,
+}

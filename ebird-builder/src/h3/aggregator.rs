@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 pub struct H3Aggregator {
     pub grid: H3Grid,
     pub cells: HashMap<CellIndex, H3CellData>,
+    pub sampling_data: HashMap<CellIndex, usize>,
 }
 
 pub struct H3CellData {
@@ -62,6 +63,7 @@ pub struct GridCellPack {
     pub date_range_end: NaiveDate,
     pub data_quality: String,
     pub species: Vec<SpeciesData>,
+    pub total_complete_checklists_sampled: Option<usize>,
 }
 
 impl H3Aggregator {
@@ -69,6 +71,18 @@ impl H3Aggregator {
         Ok(Self {
             grid: H3Grid::new(resolution)?,
             cells: HashMap::new(),
+            sampling_data: HashMap::new(),
+        })
+    }
+
+    pub fn new_with_sampling(
+        resolution: u8,
+        sampling_data: HashMap<CellIndex, usize>,
+    ) -> Result<Self> {
+        Ok(Self {
+            grid: H3Grid::new(resolution)?,
+            cells: HashMap::new(),
+            sampling_data,
         })
     }
 
@@ -87,9 +101,10 @@ impl H3Aggregator {
     }
 
     pub fn finalize(self, config: &FilterConfig) -> Vec<GridCellPack> {
+        let sampling_data = &self.sampling_data;
         self.cells
             .into_values()
-            .map(|cell| cell.finalize(&self.grid, config))
+            .map(|cell| cell.finalize(&self.grid, config, sampling_data))
             .collect()
     }
 }
@@ -143,8 +158,25 @@ impl H3CellData {
         Ok(())
     }
 
-    pub fn finalize(self, grid: &H3Grid, config: &FilterConfig) -> GridCellPack {
+    pub fn finalize(
+        self,
+        grid: &H3Grid,
+        config: &FilterConfig,
+        sampling_data: &HashMap<CellIndex, usize>,
+    ) -> GridCellPack {
         let total_complete = self.complete_checklists.len() as f64;
+        let total_sampled = sampling_data.get(&self.h3_cell).copied();
+
+        // Use sampling data for frequency calculations if available and reliable
+        let frequency_denominator = if let Some(sampled) = total_sampled {
+            if sampled >= 100 {
+                sampled as f64
+            } else {
+                total_complete
+            }
+        } else {
+            total_complete
+        };
 
         let species: Vec<SpeciesData> = self
             .species
@@ -158,8 +190,8 @@ impl H3CellData {
                     return None;
                 }
 
-                let yearly_frequency = if total_complete > 0.0 {
-                    total_lists as f64 / total_complete
+                let yearly_frequency = if frequency_denominator > 0.0 {
+                    total_lists as f64 / frequency_denominator
                 } else {
                     0.0
                 };
@@ -171,8 +203,17 @@ impl H3CellData {
                 // Compute monthly frequencies
                 let monthly_data = compute_monthly_data(&acc.observations, total_complete);
 
-                // Classify confidence tier
-                let (confidence_tier, confidence_boost) = classify_species(yearly_frequency);
+                // Classify confidence tier and get base boost
+                let (confidence_tier, base_confidence_boost) =
+                    classify_species(yearly_frequency);
+
+                // Apply absence penalty if we have strong sampling evidence
+                let absence_penalty = calculate_absence_penalty(
+                    total_sampled,
+                    yearly_frequency,
+                );
+
+                let final_confidence_boost = base_confidence_boost * absence_penalty;
 
                 Some(SpeciesData {
                     scientific_name: acc.scientific_name,
@@ -183,7 +224,7 @@ impl H3CellData {
                     first_observation: acc.observations.iter().map(|o| o.date).min().unwrap(),
                     last_observation: acc.observations.iter().map(|o| o.date).max().unwrap(),
                     confidence_tier,
-                    confidence_boost,
+                    confidence_boost: final_confidence_boost,
                     monthly_frequency: monthly_data.0,
                     monthly_observations: monthly_data.1,
                 })
@@ -216,6 +257,7 @@ impl H3CellData {
                 .unwrap_or_else(|| NaiveDate::from_ymd_opt(2025, 12, 31).unwrap()),
             data_quality,
             species,
+            total_complete_checklists_sampled: total_sampled,
         }
     }
 }
@@ -259,4 +301,29 @@ pub(crate) fn classify_species(yearly_frequency: f64) -> (String, f64) {
     let boost = 1.0 + (yearly_frequency * (MAX_BOOST - 1.0));
 
     (tier.to_string(), boost.min(MAX_BOOST))
+}
+
+/// Calculate absence penalty based on sampling data
+///
+/// If we have strong sampling evidence (1000+ complete checklists) and the species
+/// has very low frequency (<0.1%), apply a -20% penalty to reduce false positives
+pub(crate) fn calculate_absence_penalty(
+    total_sampled: Option<usize>,
+    yearly_frequency: f64,
+) -> f64 {
+    // Only apply penalty if we have strong sampling evidence
+    if let Some(sampled) = total_sampled {
+        // Require 1000+ complete checklists for strong absence signal
+        if sampled >= 1000 {
+            // Apply penalty for very rare species (< 0.1% frequency)
+            // This represents ~1 detection per 1000 complete checklists
+            if yearly_frequency < 0.001 {
+                // -20% penalty for strong absence evidence
+                return 0.8;
+            }
+        }
+    }
+
+    // No penalty - return 1.0 (no modification to boost)
+    1.0
 }

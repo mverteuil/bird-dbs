@@ -53,7 +53,8 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
             total_observations INTEGER NOT NULL,
             date_range_start DATE NOT NULL,
             date_range_end DATE NOT NULL,
-            data_quality TEXT DEFAULT 'good'
+            data_quality TEXT DEFAULT 'good',
+            total_complete_checklists_sampled INTEGER
         );
 
         CREATE INDEX idx_grid_resolution ON grid_metadata(resolution);
@@ -191,8 +192,8 @@ fn insert_grid_data(
         let mut stmt = tx.prepare(
             "INSERT INTO grid_metadata (h3_cell, resolution, center_lat, center_lon, \
              total_checklists, complete_checklists, total_observations, \
-             date_range_start, date_range_end, data_quality) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             date_range_start, date_range_end, data_quality, total_complete_checklists_sampled) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
 
         for cell in grid_cells {
@@ -209,6 +210,7 @@ fn insert_grid_data(
                 cell.date_range_start.to_string(),
                 cell.date_range_end.to_string(),
                 &cell.data_quality,
+                cell.total_complete_checklists_sampled,
             ])?;
         }
     }

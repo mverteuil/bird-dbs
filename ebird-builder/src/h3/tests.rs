@@ -2,7 +2,8 @@
 #[cfg(test)]
 mod tests {
     use super::super::aggregator::{
-        classify_species, compute_monthly_data, H3Aggregator, H3CellData, ObservationEvent,
+        calculate_absence_penalty, classify_species, compute_monthly_data, H3Aggregator,
+        H3CellData, ObservationEvent,
     };
     use super::super::grid::H3Grid;
     use crate::config::FilterConfig;
@@ -294,7 +295,7 @@ mod tests {
         let mut config = default_filter_config();
         config.min_observations = 2;
 
-        let pack = cell_data.finalize(&grid, &config);
+        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new());
 
         // Should have 0 species (filtered out)
         assert_eq!(pack.species.len(), 0);
@@ -315,7 +316,7 @@ mod tests {
         let mut config = default_filter_config();
         config.min_checklists = 2;
 
-        let pack = cell_data.finalize(&grid, &config);
+        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new());
 
         // Should have 0 species (filtered out)
         assert_eq!(pack.species.len(), 0);
@@ -345,7 +346,7 @@ mod tests {
         config.min_observations = 2;
         config.min_checklists = 2;
 
-        let pack = cell_data.finalize(&grid, &config);
+        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new());
 
         // Should have 1 species (passes filters)
         assert_eq!(pack.species.len(), 1);
@@ -367,7 +368,7 @@ mod tests {
             record.sampling_event_id = format!("S{}", i);
             cell_data.add_observation(&record).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
         assert_eq!(pack.data_quality, "excellent");
 
         // Test "good" (50-99 complete checklists)
@@ -377,7 +378,7 @@ mod tests {
             record.sampling_event_id = format!("S{}", i);
             cell_data.add_observation(&record).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
         assert_eq!(pack.data_quality, "good");
 
         // Test "fair" (20-49 complete checklists)
@@ -387,7 +388,7 @@ mod tests {
             record.sampling_event_id = format!("S{}", i);
             cell_data.add_observation(&record).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
         assert_eq!(pack.data_quality, "fair");
 
         // Test "sparse" (<20 complete checklists)
@@ -397,7 +398,7 @@ mod tests {
             record.sampling_event_id = format!("S{}", i);
             cell_data.add_observation(&record).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
         assert_eq!(pack.data_quality, "sparse");
     }
 
@@ -418,5 +419,174 @@ mod tests {
         assert_eq!(packs.len(), 1); // 1 cell
         assert_eq!(packs[0].total_checklists, 5);
         assert_eq!(packs[0].complete_checklists, 5);
+    }
+
+    // New tests for absence penalty functionality
+
+    #[test]
+    fn test_calculate_absence_penalty_no_sampling_data() {
+        // No penalty without sampling data
+        let penalty = calculate_absence_penalty(None, 0.0001);
+        assert_eq!(penalty, 1.0);
+    }
+
+    #[test]
+    fn test_calculate_absence_penalty_insufficient_samples() {
+        // No penalty with < 1000 samples
+        let penalty = calculate_absence_penalty(Some(500), 0.0001);
+        assert_eq!(penalty, 1.0);
+    }
+
+    #[test]
+    fn test_calculate_absence_penalty_strong_absence_signal() {
+        // Apply penalty with 1000+ samples and very low frequency
+        let penalty = calculate_absence_penalty(Some(1500), 0.0005);
+        assert_eq!(penalty, 0.8); // -20% penalty
+    }
+
+    #[test]
+    fn test_calculate_absence_penalty_no_penalty_above_threshold() {
+        // No penalty if frequency >= 0.1%
+        let penalty = calculate_absence_penalty(Some(1500), 0.002);
+        assert_eq!(penalty, 1.0);
+    }
+
+    #[test]
+    fn test_aggregator_with_sampling_data() {
+        use std::collections::HashMap;
+
+        let mut aggregator = H3Aggregator::new(8).unwrap();
+
+        // Add a record
+        let record = sample_record();
+        let cell = aggregator
+            .grid
+            .lat_lon_to_cell(record.latitude, record.longitude)
+            .unwrap();
+        aggregator.add_record(&record).unwrap();
+
+        // Create sampling data for this cell
+        let mut sampling_data = HashMap::new();
+        sampling_data.insert(cell, 1200);
+
+        // Create aggregator with sampling data
+        let mut aggregator_with_sampling =
+            H3Aggregator::new_with_sampling(8, sampling_data.clone()).unwrap();
+        aggregator_with_sampling.add_record(&record).unwrap();
+
+        let config = default_filter_config();
+        let packs = aggregator_with_sampling.finalize(&config);
+
+        assert_eq!(packs.len(), 1);
+        // Verify sampling data is included
+        assert_eq!(packs[0].total_complete_checklists_sampled, Some(1200));
+    }
+
+    #[test]
+    fn test_aggregator_absence_penalty_application() {
+        use std::collections::HashMap;
+
+        let mut aggregator = H3Aggregator::new(8).unwrap();
+
+        // Add a very rare species (only 2 checklists out of 1500 sampled)
+        let mut record1 = sample_record();
+        record1.scientific_name = "Rare Species".to_string();
+        record1.common_name = "Rare Bird".to_string();
+        record1.sampling_event_id = "S1".to_string();
+
+        let mut record2 = sample_record();
+        record2.scientific_name = "Rare Species".to_string();
+        record2.common_name = "Rare Bird".to_string();
+        record2.sampling_event_id = "S2".to_string();
+
+        let cell = aggregator
+            .grid
+            .lat_lon_to_cell(record1.latitude, record1.longitude)
+            .unwrap();
+
+        aggregator.add_record(&record1).unwrap();
+        aggregator.add_record(&record2).unwrap();
+
+        // Create sampling data showing strong absence signal
+        let mut sampling_data = HashMap::new();
+        sampling_data.insert(cell, 1500);
+
+        let mut aggregator_with_sampling =
+            H3Aggregator::new_with_sampling(8, sampling_data).unwrap();
+        aggregator_with_sampling.add_record(&record1).unwrap();
+        aggregator_with_sampling.add_record(&record2).unwrap();
+
+        let config = default_filter_config();
+        let packs = aggregator_with_sampling.finalize(&config);
+
+        assert_eq!(packs.len(), 1);
+
+        // The species should have reduced confidence due to absence penalty
+        let species_list = &packs[0].species;
+        assert!(species_list.len() > 0);
+
+        // Frequency = 2 checklists / 1500 sampled = 0.00133 (> 0.001 threshold but < 0.01)
+        // Should NOT trigger absence penalty (frequency >= 0.001)
+        let rare_species = species_list
+            .iter()
+            .find(|s| s.scientific_name == "Rare Species")
+            .expect("Should find the rare species");
+
+        // Base boost for vagrant tier (freq < 0.01) is ~1.0
+        // No absence penalty since frequency >= 0.001
+        assert!(rare_species.confidence_boost >= 1.0);
+        assert!(rare_species.confidence_boost <= 1.05); // Small boost expected
+    }
+
+    #[test]
+    fn test_aggregator_no_penalty_common_species() {
+        use std::collections::HashMap;
+
+        let mut aggregator = H3Aggregator::new(8).unwrap();
+
+        // Add a common species multiple times
+        for i in 0..50 {
+            let mut record = sample_record();
+            record.sampling_event_id = format!("S{}", i);
+            record.scientific_name = "Common Species".to_string();
+            record.common_name = "Common Bird".to_string();
+            aggregator.add_record(&record).unwrap();
+        }
+
+        let cell = aggregator
+            .grid
+            .lat_lon_to_cell(sample_record().latitude, sample_record().longitude)
+            .unwrap();
+
+        // Create sampling data
+        let mut sampling_data = HashMap::new();
+        sampling_data.insert(cell, 1500);
+
+        let mut aggregator_with_sampling =
+            H3Aggregator::new_with_sampling(8, sampling_data).unwrap();
+
+        for i in 0..50 {
+            let mut record = sample_record();
+            record.sampling_event_id = format!("S{}", i);
+            record.scientific_name = "Common Species".to_string();
+            record.common_name = "Common Bird".to_string();
+            aggregator_with_sampling.add_record(&record).unwrap();
+        }
+
+        let config = default_filter_config();
+        let packs = aggregator_with_sampling.finalize(&config);
+
+        assert_eq!(packs.len(), 1);
+
+        // Frequency = 50 / 1500 = 0.033 (> 0.001 threshold)
+        // No absence penalty should be applied
+        let species_list = &packs[0].species;
+        let common_species = species_list
+            .iter()
+            .find(|s| s.scientific_name == "Common Species")
+            .expect("Should find the common species");
+
+        // Should have positive boost (no penalty)
+        assert!(common_species.confidence_boost >= 1.0);
     }
 }
