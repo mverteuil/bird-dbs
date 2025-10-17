@@ -1,3 +1,4 @@
+mod avilistr;
 mod config;
 mod db;
 mod density_loader;
@@ -37,6 +38,10 @@ struct Cli {
     #[arg(short = 'd', long)]
     density_reports: Option<PathBuf>,
 
+    /// Avilistr mapping CSV (scientific_name -> avibase_id)
+    #[arg(short = 'a', long)]
+    avilistr: PathBuf,
+
     /// Date range start (YYYY-MM-DD)
     #[arg(long, default_value = "2020-01-01")]
     date_start: String,
@@ -61,6 +66,10 @@ fn main() -> Result<()> {
     let manifest: PackManifest = serde_json::from_reader(manifest_file)?;
 
     info!("Found {} regions in manifest", manifest.regions.len());
+
+    // Load avibase ID mapping
+    info!("Loading avibase ID mapping from {:?}", cli.avilistr);
+    let avibase_mapping = avilistr::load_avibase_mapping(&cli.avilistr)?;
 
     // Create output directory
     std::fs::create_dir_all(&cli.output_dir)?;
@@ -123,9 +132,9 @@ fn main() -> Result<()> {
 
         // Create H3 aggregator with sampling data
         let mut aggregator = if sampling_data.is_empty() {
-            H3Aggregator::new(h3_resolution)?
+            H3Aggregator::new(h3_resolution, avibase_mapping.clone())?
         } else {
-            H3Aggregator::new_with_sampling(h3_resolution, sampling_data)?
+            H3Aggregator::new_with_sampling(h3_resolution, sampling_data, avibase_mapping.clone())?
         };
         let mut total_checklists = HashSet::new();
         let mut total_observations = 0;

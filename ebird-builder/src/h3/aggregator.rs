@@ -10,6 +10,7 @@ pub struct H3Aggregator {
     pub grid: H3Grid,
     pub cells: HashMap<CellIndex, H3CellData>,
     pub sampling_data: HashMap<CellIndex, usize>,
+    pub avibase_mapping: HashMap<String, String>,
 }
 
 pub struct H3CellData {
@@ -25,7 +26,6 @@ pub struct H3CellData {
 
 pub struct SpeciesAccumulator {
     pub scientific_name: String,
-    pub common_name: String,
     pub observations: Vec<ObservationEvent>,
     pub checklists: HashSet<String>,
 }
@@ -38,8 +38,8 @@ pub struct ObservationEvent {
 }
 
 pub struct SpeciesData {
+    pub avibase_id: String,
     pub scientific_name: String,
-    pub common_name: String,
     pub yearly_frequency: f64,
     pub total_observations: u32,
     pub total_checklists: u32,
@@ -67,22 +67,25 @@ pub struct GridCellPack {
 }
 
 impl H3Aggregator {
-    pub fn new(resolution: u8) -> Result<Self> {
+    pub fn new(resolution: u8, avibase_mapping: HashMap<String, String>) -> Result<Self> {
         Ok(Self {
             grid: H3Grid::new(resolution)?,
             cells: HashMap::new(),
             sampling_data: HashMap::new(),
+            avibase_mapping,
         })
     }
 
     pub fn new_with_sampling(
         resolution: u8,
         sampling_data: HashMap<CellIndex, usize>,
+        avibase_mapping: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self {
             grid: H3Grid::new(resolution)?,
             cells: HashMap::new(),
             sampling_data,
+            avibase_mapping,
         })
     }
 
@@ -102,9 +105,10 @@ impl H3Aggregator {
 
     pub fn finalize(self, config: &FilterConfig) -> Vec<GridCellPack> {
         let sampling_data = &self.sampling_data;
+        let avibase_mapping = &self.avibase_mapping;
         self.cells
             .into_values()
-            .map(|cell| cell.finalize(&self.grid, config, sampling_data))
+            .map(|cell| cell.finalize(&self.grid, config, sampling_data, avibase_mapping))
             .collect()
     }
 }
@@ -143,7 +147,6 @@ impl H3CellData {
             .entry(record.scientific_name.clone())
             .or_insert_with(|| SpeciesAccumulator {
                 scientific_name: record.scientific_name.clone(),
-                common_name: record.common_name.clone(),
                 observations: Vec::new(),
                 checklists: HashSet::new(),
             });
@@ -163,6 +166,7 @@ impl H3CellData {
         grid: &H3Grid,
         config: &FilterConfig,
         sampling_data: &HashMap<CellIndex, usize>,
+        avibase_mapping: &HashMap<String, String>,
     ) -> GridCellPack {
         let total_complete = self.complete_checklists.len() as f64;
         let total_sampled = sampling_data.get(&self.h3_cell).copied();
@@ -215,9 +219,21 @@ impl H3CellData {
 
                 let final_confidence_boost = base_confidence_boost * absence_penalty;
 
+                // Look up avibase_id from scientific_name
+                let avibase_id = avibase_mapping
+                    .get(&acc.scientific_name)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        log::warn!(
+                            "No avibase_id found for species: {}",
+                            acc.scientific_name
+                        );
+                        format!("unknown-{}", acc.scientific_name)
+                    });
+
                 Some(SpeciesData {
+                    avibase_id,
                     scientific_name: acc.scientific_name,
-                    common_name: acc.common_name,
                     yearly_frequency,
                     total_observations: total_obs,
                     total_checklists: total_lists,

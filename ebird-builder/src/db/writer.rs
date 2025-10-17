@@ -61,10 +61,16 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
         CREATE INDEX idx_grid_quality ON grid_metadata(data_quality);
         CREATE INDEX idx_grid_latlon ON grid_metadata(center_lat, center_lon);
 
+        CREATE TABLE species_lookup (
+            avibase_id TEXT PRIMARY KEY NOT NULL,
+            scientific_name TEXT NOT NULL UNIQUE
+        );
+
+        CREATE INDEX idx_species_scientific ON species_lookup(scientific_name);
+
         CREATE TABLE grid_species (
             h3_cell BIGINT NOT NULL,
-            scientific_name TEXT NOT NULL,
-            common_name TEXT NOT NULL,
+            avibase_id TEXT NOT NULL,
             yearly_frequency REAL NOT NULL CHECK(yearly_frequency >= 0.0 AND yearly_frequency <= 1.0),
             total_observations INTEGER NOT NULL CHECK(total_observations > 0),
             total_checklists INTEGER NOT NULL CHECK(total_checklists > 0),
@@ -74,13 +80,14 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
             confidence_boost REAL NOT NULL DEFAULT 1.0 CHECK(confidence_boost >= 1.0 AND confidence_boost <= 2.0),
             monthly_frequency_json TEXT NOT NULL,
             monthly_observations_json TEXT NOT NULL,
-            PRIMARY KEY (h3_cell, scientific_name),
-            FOREIGN KEY (h3_cell) REFERENCES grid_metadata(h3_cell)
+            PRIMARY KEY (h3_cell, avibase_id),
+            FOREIGN KEY (h3_cell) REFERENCES grid_metadata(h3_cell),
+            FOREIGN KEY (avibase_id) REFERENCES species_lookup(avibase_id)
         );
 
         CREATE INDEX idx_grid_species_freq ON grid_species(h3_cell, yearly_frequency DESC);
         CREATE INDEX idx_grid_species_tier ON grid_species(h3_cell, confidence_tier);
-        CREATE INDEX idx_grid_species_name ON grid_species(scientific_name);"
+        CREATE INDEX idx_grid_species_avibase ON grid_species(avibase_id);"
     )?;
     Ok(())
 }
@@ -187,6 +194,28 @@ fn insert_grid_data(
     let grid = H3Grid::new(resolution)?;
     let tx = conn.transaction()?;
 
+    // Collect unique species for species_lookup table
+    let mut species_lookup: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for cell in grid_cells {
+        for sp in &cell.species {
+            species_lookup
+                .entry(sp.avibase_id.clone())
+                .or_insert_with(|| sp.scientific_name.clone());
+        }
+    }
+
+    // Insert species_lookup
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR IGNORE INTO species_lookup (avibase_id, scientific_name) VALUES (?, ?)",
+        )?;
+
+        for (avibase_id, scientific_name) in species_lookup {
+            stmt.execute(params![avibase_id, scientific_name])?;
+        }
+    }
+
     // Insert grid_metadata
     {
         let mut stmt = tx.prepare(
@@ -218,11 +247,11 @@ fn insert_grid_data(
     // Insert grid_species
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO grid_species (h3_cell, scientific_name, common_name, \
+            "INSERT INTO grid_species (h3_cell, avibase_id, \
              yearly_frequency, total_observations, total_checklists, \
              first_observation, last_observation, confidence_tier, confidence_boost, \
              monthly_frequency_json, monthly_observations_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
 
         for cell in grid_cells {
@@ -231,8 +260,7 @@ fn insert_grid_data(
             for sp in &cell.species {
                 stmt.execute(params![
                     h3_i64,
-                    &sp.scientific_name,
-                    &sp.common_name,
+                    &sp.avibase_id,
                     sp.yearly_frequency,
                     sp.total_observations,
                     sp.total_checklists,

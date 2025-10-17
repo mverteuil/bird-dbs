@@ -9,6 +9,22 @@ mod tests {
     use crate::config::FilterConfig;
     use crate::ebird::EBirdRecord;
     use chrono::NaiveDate;
+    use std::collections::HashMap;
+
+    fn test_avibase_mapping() -> HashMap<String, String> {
+        let mut mapping = HashMap::new();
+        mapping.insert(
+            "Turdus migratorius".to_string(),
+            "avibase-4A2E6B9F".to_string(),
+        );
+        mapping.insert(
+            "Cyanocitta cristata".to_string(),
+            "avibase-12345678".to_string(),
+        );
+        mapping.insert("Common Species".to_string(), "avibase-COMMON01".to_string());
+        mapping.insert("Rare Species".to_string(), "avibase-RARE0001".to_string());
+        mapping
+    }
 
     fn sample_record() -> EBirdRecord {
         EBirdRecord {
@@ -83,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_h3_aggregator_creation() {
-        let aggregator = H3Aggregator::new(8);
+        let aggregator = H3Aggregator::new(8, test_avibase_mapping());
         assert!(aggregator.is_ok());
         let aggregator = aggregator.unwrap();
         assert_eq!(aggregator.cells.len(), 0);
@@ -91,7 +107,7 @@ mod tests {
 
     #[test]
     fn test_h3_aggregator_add_record() {
-        let mut aggregator = H3Aggregator::new(8).unwrap();
+        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
         let record = sample_record();
 
         let result = aggregator.add_record(&record);
@@ -101,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_h3_aggregator_multiple_records_same_cell() {
-        let mut aggregator = H3Aggregator::new(8).unwrap();
+        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
 
         let mut record1 = sample_record();
         record1.sampling_event_id = "S111".to_string();
@@ -125,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_h3_aggregator_multiple_records_different_cells() {
-        let mut aggregator = H3Aggregator::new(8).unwrap();
+        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
 
         let mut record1 = sample_record();
         record1.latitude = 42.3601;
@@ -295,7 +311,7 @@ mod tests {
         let mut config = default_filter_config();
         config.min_observations = 2;
 
-        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new());
+        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new(), &test_avibase_mapping());
 
         // Should have 0 species (filtered out)
         assert_eq!(pack.species.len(), 0);
@@ -316,7 +332,7 @@ mod tests {
         let mut config = default_filter_config();
         config.min_checklists = 2;
 
-        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new());
+        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new(), &test_avibase_mapping());
 
         // Should have 0 species (filtered out)
         assert_eq!(pack.species.len(), 0);
@@ -346,7 +362,7 @@ mod tests {
         config.min_observations = 2;
         config.min_checklists = 2;
 
-        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new());
+        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new(), &test_avibase_mapping());
 
         // Should have 1 species (passes filters)
         assert_eq!(pack.species.len(), 1);
@@ -368,7 +384,7 @@ mod tests {
             record.sampling_event_id = format!("S{}", i);
             cell_data.add_observation(&record).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new(), &test_avibase_mapping());
         assert_eq!(pack.data_quality, "excellent");
 
         // Test "good" (50-99 complete checklists)
@@ -378,7 +394,7 @@ mod tests {
             record.sampling_event_id = format!("S{}", i);
             cell_data.add_observation(&record).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new(), &test_avibase_mapping());
         assert_eq!(pack.data_quality, "good");
 
         // Test "fair" (20-49 complete checklists)
@@ -388,7 +404,7 @@ mod tests {
             record.sampling_event_id = format!("S{}", i);
             cell_data.add_observation(&record).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new(), &test_avibase_mapping());
         assert_eq!(pack.data_quality, "fair");
 
         // Test "sparse" (<20 complete checklists)
@@ -398,13 +414,13 @@ mod tests {
             record.sampling_event_id = format!("S{}", i);
             cell_data.add_observation(&record).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new(), &test_avibase_mapping());
         assert_eq!(pack.data_quality, "sparse");
     }
 
     #[test]
     fn test_integration_aggregator_finalize() {
-        let mut aggregator = H3Aggregator::new(8).unwrap();
+        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
 
         // Add multiple records
         for i in 0..5 {
@@ -455,7 +471,7 @@ mod tests {
     fn test_aggregator_with_sampling_data() {
         use std::collections::HashMap;
 
-        let mut aggregator = H3Aggregator::new(8).unwrap();
+        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
 
         // Add a record
         let record = sample_record();
@@ -471,7 +487,7 @@ mod tests {
 
         // Create aggregator with sampling data
         let mut aggregator_with_sampling =
-            H3Aggregator::new_with_sampling(8, sampling_data.clone()).unwrap();
+            H3Aggregator::new_with_sampling(8, sampling_data.clone(), test_avibase_mapping()).unwrap();
         aggregator_with_sampling.add_record(&record).unwrap();
 
         let config = default_filter_config();
@@ -486,7 +502,7 @@ mod tests {
     fn test_aggregator_absence_penalty_application() {
         use std::collections::HashMap;
 
-        let mut aggregator = H3Aggregator::new(8).unwrap();
+        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
 
         // Add a very rare species (only 2 checklists out of 1500 sampled)
         let mut record1 = sample_record();
@@ -512,7 +528,7 @@ mod tests {
         sampling_data.insert(cell, 1500);
 
         let mut aggregator_with_sampling =
-            H3Aggregator::new_with_sampling(8, sampling_data).unwrap();
+            H3Aggregator::new_with_sampling(8, sampling_data, test_avibase_mapping()).unwrap();
         aggregator_with_sampling.add_record(&record1).unwrap();
         aggregator_with_sampling.add_record(&record2).unwrap();
 
@@ -542,7 +558,7 @@ mod tests {
     fn test_aggregator_no_penalty_common_species() {
         use std::collections::HashMap;
 
-        let mut aggregator = H3Aggregator::new(8).unwrap();
+        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
 
         // Add a common species multiple times
         for i in 0..50 {
@@ -563,7 +579,7 @@ mod tests {
         sampling_data.insert(cell, 1500);
 
         let mut aggregator_with_sampling =
-            H3Aggregator::new_with_sampling(8, sampling_data).unwrap();
+            H3Aggregator::new_with_sampling(8, sampling_data, test_avibase_mapping()).unwrap();
 
         for i in 0..50 {
             let mut record = sample_record();
