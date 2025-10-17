@@ -83,8 +83,8 @@ class IOCDatabaseBuilder:
         print(f"Processing IOC XML: {xml_file}")
         print(f"Loading Avibase mapping: {avilistr_csv}")
 
-        # Load Avibase mapping
-        avibase_lookup = self._load_avibase_mapping(avilistr_csv)
+        # Load Avibase mapping and BOW URLs
+        avibase_lookup, bow_url_lookup = self._load_avibase_mapping(avilistr_csv)
 
         # Clear existing data
         with self.get_db() as session:
@@ -95,7 +95,7 @@ class IOCDatabaseBuilder:
             session.commit()
 
         # Stream XML data directly to database
-        species_count = self._stream_xml_to_database(xml_file, avibase_lookup)
+        species_count = self._stream_xml_to_database(xml_file, avibase_lookup, bow_url_lookup)
 
         # Stream XLSX translations if provided
         translation_count = 0
@@ -114,19 +114,20 @@ class IOCDatabaseBuilder:
 
         print(f"Database populated: {species_count} species, {translation_count} translations")
 
-    def _load_avibase_mapping(self, avilistr_csv: Path) -> dict[str, str]:
-        """Load Avibase ID mapping from AviList 2025 CSV file.
+    def _load_avibase_mapping(self, avilistr_csv: Path) -> tuple[dict[str, str], dict[str, str]]:
+        """Load Avibase ID and BOW URL mappings from AviList 2025 CSV file.
 
         Args:
             avilistr_csv: Path to Avibase mapping CSV file (AviList 2025 format)
 
         Returns:
-            Dictionary mapping scientific_name (lowercase) to avibase_id
+            Tuple of (avibase_id_lookup, bow_url_lookup) - both keyed by scientific_name (lowercase)
         """
         import pandas as pd
 
         avilistr_data = pd.read_csv(avilistr_csv)
         avibase_lookup = {}
+        bow_url_lookup = {}
 
         for _, row in avilistr_data.iterrows():
             # AviList 2025 format uses Scientific_name and AvibaseID
@@ -134,15 +135,26 @@ class IOCDatabaseBuilder:
             avibase_id = str(row["AvibaseID"]).strip()
             avibase_lookup[scientific_name] = avibase_id
 
-        print(f"  Loaded {len(avibase_lookup)} Avibase ID mappings")
-        return avibase_lookup
+            # Extract BOW URL if available
+            if "Birds_of_the_World_URL" in row:
+                bow_value = row["Birds_of_the_World_URL"]
+                if bow_value is not None and str(bow_value).strip() not in ("", "nan"):
+                    bow_url = str(bow_value).strip()
+                    bow_url_lookup[scientific_name] = bow_url
 
-    def _stream_xml_to_database(self, xml_file: Path, avibase_lookup: dict[str, str]) -> int:
+        print(f"  Loaded {len(avibase_lookup)} Avibase ID mappings")
+        print(f"  Loaded {len(bow_url_lookup)} Birds of the World URLs")
+        return avibase_lookup, bow_url_lookup
+
+    def _stream_xml_to_database(
+        self, xml_file: Path, avibase_lookup: dict[str, str], bow_url_lookup: dict[str, str]
+    ) -> int:
         """Stream species data from IOC XML file directly to database.
 
         Args:
             xml_file: Path to IOC XML file
             avibase_lookup: Dictionary mapping scientific_name to avibase_id
+            bow_url_lookup: Dictionary mapping scientific_name to Birds of the World URL
 
         Returns:
             Number of species inserted
@@ -167,7 +179,7 @@ class IOCDatabaseBuilder:
             batch_size = 1000
 
             for order_elem in root.findall(".//order"):
-                order_name = self._get_element_text(order_elem, "latin_name", "")
+                order_name = self._get_element_text(order_elem, "latin_name", "").title()
 
                 for family_elem in order_elem.findall(".//family"):
                     family_latin = self._get_element_text(family_elem, "latin_name", "")
@@ -175,6 +187,10 @@ class IOCDatabaseBuilder:
                     for genus_elem in family_elem.findall(".//genus"):
                         genus_name = self._get_element_text(genus_elem, "latin_name", "")
                         genus_authority = self._get_element_text(genus_elem, "authority", "")
+
+                        # Skip entire genus if marked as extinct
+                        if genus_elem.get("extinct") == "yes":
+                            continue
 
                         for species_elem in genus_elem.findall("species"):
                             species_epithet = self._get_element_text(species_elem, "latin_name", "")
@@ -189,8 +205,9 @@ class IOCDatabaseBuilder:
                                 species_elem, "breeding_subregions", ""
                             )
 
-                            # TODO: Detect and skip extinct species
-                            # Check for daggers (†, ††) in english_name or extinct attribute
+                            # Skip extinct species
+                            if species_elem.get("extinct") == "yes":
+                                continue
 
                             if genus_name and species_epithet and english_name:
                                 scientific_name = f"{genus_name} {species_epithet}"
@@ -201,6 +218,9 @@ class IOCDatabaseBuilder:
                                 if not avibase_id:
                                     # Skip species without Avibase ID mapping
                                     continue
+
+                                # Look up BOW URL (optional)
+                                bow_url = bow_url_lookup.get(scientific_name.lower())
 
                                 species_batch.append(
                                     {
@@ -214,6 +234,7 @@ class IOCDatabaseBuilder:
                                         "authority": authority,
                                         "breeding_regions": breeding_regions,
                                         "breeding_subregions": breeding_subregions,
+                                        "bow_url": bow_url,
                                     }
                                 )
                                 species_count += 1
@@ -454,63 +475,111 @@ class IOCDatabaseBuilder:
         return elem.text.strip() if elem is not None and elem.text else default
 
     def _map_language_to_code(self, language_name: str) -> str | None:
-        """Map language display name to ISO language code."""
+        """Map language display name to ISO language code.
+
+        Includes all 44 languages from IOC World Bird List v2.1.1.
+        IOC serves as authoritative source; Wikidata provides fallback coverage.
+        """
         language_map = {
+            # All 44 IOC World Bird List languages (alphabetical by code)
+            "Afrikaans": "af",
+            "Arabic": "ar",
+            "Belarusian": "be",
+            "Bulgarian": "bg",
             "Catalan": "ca",
-            "Chinese": "zh",
-            "Chinese (Traditional)": "zh-TW",
-            "Croatian": "hr",
             "Czech": "cs",
             "Danish": "da",
-            "Dutch": "nl",
+            "German": "de",
+            "Greek": "el",
+            "Spanish": "es",
+            "Estonian": "et",
+            "Persian": "fa",
             "Finnish": "fi",
             "French": "fr",
-            "German": "de",
+            "French (Gaudin)": "fr-Gaudin",
+            "Hebrew": "he",
+            "Croatian": "hr",
+            "Hungarian": "hu",
+            "Indonesian": "id",
+            "Icelandic": "is",
             "Italian": "it",
             "Japanese": "ja",
+            "Korean": "ko",
             "Lithuanian": "lt",
+            "Latvian": "lv",
+            "Macedonian": "mk",
+            "Malayalam": "ml",
+            "Dutch": "nl",
             "Norwegian": "no",
             "Polish": "pl",
             "Portuguese (Lusophone)": "pt",
             "Portuguese (Portuguese)": "pt-PT",
+            "Romanian": "ro",
             "Russian": "ru",
-            "Serbian": "sr",
+            "Northern Sami": "se",
             "Slovak": "sk",
-            "Spanish": "es",
+            "Slovenian": "sl",
+            "Serbian": "sr",
             "Swedish": "sv",
+            "Thai": "th",
             "Turkish": "tr",
             "Ukrainian": "uk",
-            # Add more as needed
+            "Chinese": "zh",
+            "Chinese (Traditional)": "zh-TW",
         }
         return language_map.get(language_name)
 
     def _get_language_names(self) -> dict[str, str]:
-        """Get mapping of language codes to display names."""
+        """Get mapping of language codes to display names.
+
+        Includes all 44 languages from IOC World Bird List v2.1.1.
+        """
         return {
+            # All 44 IOC World Bird List languages (alphabetical by code)
+            "af": "Afrikaans",
+            "ar": "Arabic",
+            "be": "Belarusian",
+            "bg": "Bulgarian",
             "ca": "Catalan",
-            "zh": "Chinese",
-            "zh-TW": "Chinese (Traditional)",
-            "hr": "Croatian",
             "cs": "Czech",
             "da": "Danish",
-            "nl": "Dutch",
+            "de": "German",
+            "el": "Greek",
+            "es": "Spanish",
+            "et": "Estonian",
+            "fa": "Persian",
             "fi": "Finnish",
             "fr": "French",
-            "de": "German",
+            "fr-Gaudin": "French (Gaudin)",
+            "he": "Hebrew",
+            "hr": "Croatian",
+            "hu": "Hungarian",
+            "id": "Indonesian",
+            "is": "Icelandic",
             "it": "Italian",
             "ja": "Japanese",
+            "ko": "Korean",
             "lt": "Lithuanian",
+            "lv": "Latvian",
+            "mk": "Macedonian",
+            "ml": "Malayalam",
+            "nl": "Dutch",
             "no": "Norwegian",
             "pl": "Polish",
             "pt": "Portuguese",
             "pt-PT": "Portuguese (Portuguese)",
+            "ro": "Romanian",
             "ru": "Russian",
-            "sr": "Serbian",
+            "se": "Northern Sami",
             "sk": "Slovak",
-            "es": "Spanish",
+            "sl": "Slovenian",
+            "sr": "Serbian",
             "sv": "Swedish",
+            "th": "Thai",
             "tr": "Turkish",
             "uk": "Ukrainian",
+            "zh": "Chinese",
+            "zh-TW": "Chinese (Traditional)",
         }
 
     def _parse_species_data(self, species_df: "pd.DataFrame") -> list[dict[str, str]]:

@@ -152,20 +152,16 @@ class TestDownloadCommand:
             return_value=http_response_factory(),
         )
 
-        # Create a mock mkdir to capture the path
-        original_mkdir = Path.mkdir
-        created_paths = []
+        # Use isolated filesystem to prevent writing to actual data/ioc directory
+        with runner.isolated_filesystem():
+            result = runner.invoke(cli, ["download", "--version", "15.1"])
 
-        def mock_mkdir(self, parents=False, exist_ok=False):
-            created_paths.append(str(self))
-            return original_mkdir(self, parents=parents, exist_ok=exist_ok)
+            # Check default directory was mentioned
+            assert "data/ioc" in result.output
 
-        mocker.patch.object(Path, "mkdir", mock_mkdir)
-
-        result = runner.invoke(cli, ["download", "--version", "15.1"])
-
-        # Check default directory was mentioned
-        assert "data/ioc" in result.output
+            # Verify files were created in the isolated data/ioc directory
+            assert (Path("data/ioc/ioc_names_plus_red.xlsx")).exists()
+            assert (Path("data/ioc/master_xml.xml")).exists()
 
     def test_download_file_size_reporting(self, runner, mocker, http_response_factory):
         """Should report file sizes correctly."""

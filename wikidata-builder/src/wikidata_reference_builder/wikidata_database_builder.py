@@ -184,11 +184,13 @@ class WikidataDatabaseBuilder:
             SPARQL query string
         """
         query = """
-        SELECT DISTINCT ?species ?speciesLabel ?scientificName ?avibaseID
+        SELECT DISTINCT ?species ?speciesLabel ?scientificName ?avibaseID ?image ?conservationStatusLabel
         WHERE {
           ?species wdt:P2026 ?avibaseID .           # Has Avibase ID (P2026)
           ?species wdt:P105 wd:Q7432 .              # Filter for species rank only (Q7432)
           OPTIONAL { ?species wdt:P225 ?scientificName . }  # Scientific name (P225)
+          OPTIONAL { ?species wdt:P18 ?image . }            # Image (P18)
+          OPTIONAL { ?species wdt:P141 ?conservationStatus . }  # Conservation status (P141)
 
           # Exclude extinct species
           FILTER NOT EXISTS { ?species wdt:P141 wd:Q237350 . }     # Not extinct (EX)
@@ -227,8 +229,12 @@ class WikidataDatabaseBuilder:
         for binding in results.get("results", {}).get("bindings", []):
             species_id = binding.get("species", {}).get("value", "").split("/")[-1]
             scientific_name = binding.get("scientificName", {}).get("value", "")
-            avibase_id = binding.get("avibaseID", {}).get("value", "")
+            avibase_id_raw = binding.get("avibaseID", {}).get("value", "")
+            # Normalize to match IOC format: "avibase-" + first 8 chars uppercase
+            avibase_id = f"avibase-{avibase_id_raw[:8].upper()}" if avibase_id_raw else ""
             english_label = binding.get("speciesLabel", {}).get("value", "")
+            image_url = binding.get("image", {}).get("value", "")
+            conservation_status = binding.get("conservationStatusLabel", {}).get("value", "")
 
             if species_id and avibase_id:
                 if species_id in seen_ids:
@@ -242,6 +248,10 @@ class WikidataDatabaseBuilder:
                             "avibase_id": avibase_id,
                             "taxon_rank": "Q7432",  # All results are species-level (filtered in query)
                             "english_name": english_label,
+                            "image_url": image_url if image_url else None,
+                            "conservation_status": conservation_status
+                            if conservation_status
+                            else None,
                         }
                     )
 
@@ -379,11 +389,13 @@ class WikidataDatabaseBuilder:
                     "avibase_id": species.get("avibase_id"),
                     "taxon_rank": species.get("taxon_rank"),
                     "english_name": species.get("english_name"),
+                    "image_url": species.get("image_url"),
+                    "conservation_status": species.get("conservation_status"),
                 }
                 session.execute(
                     text("""
-                        INSERT OR IGNORE INTO species (wikidata_id, scientific_name, avibase_id, taxon_rank, english_name)
-                        VALUES (:wikidata_id, :scientific_name, :avibase_id, :taxon_rank, :english_name)
+                        INSERT OR IGNORE INTO species (wikidata_id, scientific_name, avibase_id, taxon_rank, english_name, image_url, conservation_status)
+                        VALUES (:wikidata_id, :scientific_name, :avibase_id, :taxon_rank, :english_name, :image_url, :conservation_status)
                     """),
                     params,
                 )

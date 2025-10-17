@@ -27,6 +27,10 @@ class WikidataSpecies(SQLModel, table=True):
     taxon_rank: str | None = Field(default=None, sa_column=Column(String(30)))  # e.g., "species"
     # Common name in English as reference
     english_name: str | None = Field(default=None, sa_column=Column(String(120)))
+    # Wikimedia Commons image URL from P18 property
+    image_url: str | None = Field(default=None, sa_column=Column(String(500)))
+    # IUCN conservation status from P141 property (e.g., "Least Concern", "Endangered")
+    conservation_status: str | None = Field(default=None, sa_column=Column(String(50)))
 
 
 class WikidataTranslation(SQLModel, table=True):

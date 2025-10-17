@@ -39,6 +39,9 @@ class IOCSpecies(SQLModel, table=True):
     breeding_subregions: str | None = Field(
         default=None, sa_column=Column(String(200))
     )  # e.g., "n,c,e"
+    bow_url: str | None = Field(
+        default=None, sa_column=Column(String(200))
+    )  # e.g., "https://birdsoftheworld.org/bow/species/amerob/"
 
     # Relationships - One-to-many: one species has many translations
     # NOTE: Relationships commented out because IOC database is attached separately
