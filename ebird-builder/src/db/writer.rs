@@ -1,7 +1,11 @@
 use crate::config::RegionConfig;
 use crate::h3::{GridCellPack, H3Grid};
 use anyhow::Result;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use rusqlite::{params, Connection};
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::Path;
 
 pub fn write_region_pack(
@@ -11,26 +15,56 @@ pub fn write_region_pack(
     total_checklists: usize,
     total_observations: usize,
 ) -> Result<()> {
-    let mut conn = Connection::open(output_path)?;
+    // Derive temp uncompressed DB path from desired output path
+    // (e.g., "foo.db.gz" → "foo.db.tmp")
+    let temp_db_path = output_path.with_extension("").with_extension("db.tmp");
 
-    // Create schema
-    create_schema(&mut conn)?;
+    {
+        let mut conn = Connection::open(&temp_db_path)?;
 
-    // Insert metadata
-    insert_metadata(
-        &mut conn,
-        config,
-        grid_cells,
-        total_checklists,
-        total_observations,
-    )?;
+        // Create schema
+        create_schema(&mut conn)?;
 
-    // Insert grid data
-    insert_grid_data(&mut conn, grid_cells, config.h3_resolution)?;
+        // Insert metadata
+        insert_metadata(
+            &mut conn,
+            config,
+            grid_cells,
+            total_checklists,
+            total_observations,
+        )?;
 
-    // Optimize database
-    optimize_database(&mut conn)?;
+        // Insert grid data
+        insert_grid_data(&mut conn, grid_cells, config.h3_resolution)?;
 
+        // Optimize database
+        optimize_database(&mut conn)?;
+    } // Connection dropped and database closed
+
+    // Gzip the database file
+    gzip_file(&temp_db_path, output_path)?;
+
+    // Remove temporary file
+    std::fs::remove_file(&temp_db_path)?;
+
+    Ok(())
+}
+
+fn gzip_file(input_path: &Path, output_path: &Path) -> Result<()> {
+    let mut input_file = File::open(input_path)?;
+    let output_file = File::create(output_path)?;
+    let mut encoder = GzEncoder::new(output_file, Compression::default());
+
+    let mut buffer = vec![0; 1024 * 1024]; // 1MB buffer
+    loop {
+        let bytes_read = input_file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        encoder.write_all(&buffer[..bytes_read])?;
+    }
+
+    encoder.finish()?;
     Ok(())
 }
 
@@ -72,14 +106,15 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
             h3_cell BIGINT NOT NULL,
             avibase_id TEXT NOT NULL,
             yearly_frequency REAL NOT NULL CHECK(yearly_frequency >= 0.0 AND yearly_frequency <= 1.0),
-            total_observations INTEGER NOT NULL CHECK(total_observations > 0),
-            total_checklists INTEGER NOT NULL CHECK(total_checklists > 0),
+            total_observations INTEGER NOT NULL CHECK(total_observations >= 0),
+            total_checklists INTEGER NOT NULL CHECK(total_checklists >= 0),
             first_observation DATE NOT NULL,
             last_observation DATE NOT NULL,
-            confidence_tier TEXT NOT NULL CHECK(confidence_tier IN ('common', 'uncommon', 'rare', 'vagrant')),
-            confidence_boost REAL NOT NULL DEFAULT 1.0 CHECK(confidence_boost >= 1.0 AND confidence_boost <= 2.0),
-            monthly_frequency_json TEXT NOT NULL,
-            monthly_observations_json TEXT NOT NULL,
+            confidence_tier TEXT NOT NULL CHECK(confidence_tier IN ('common', 'uncommon', 'rare', 'vagrant', 'excluded')),
+            confidence_boost REAL NOT NULL DEFAULT 1.0 CHECK(confidence_boost >= 0.8 AND confidence_boost <= 2.0),
+            quality_score REAL NOT NULL CHECK(quality_score >= 0.0 AND quality_score <= 1.0),
+            high_quality_obs INTEGER NOT NULL CHECK(high_quality_obs >= 0),
+            low_quality_obs INTEGER NOT NULL CHECK(low_quality_obs >= 0),
             PRIMARY KEY (h3_cell, avibase_id),
             FOREIGN KEY (h3_cell) REFERENCES grid_metadata(h3_cell),
             FOREIGN KEY (avibase_id) REFERENCES species_lookup(avibase_id)
@@ -87,7 +122,49 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
 
         CREATE INDEX idx_grid_species_freq ON grid_species(h3_cell, yearly_frequency DESC);
         CREATE INDEX idx_grid_species_tier ON grid_species(h3_cell, confidence_tier);
-        CREATE INDEX idx_grid_species_avibase ON grid_species(avibase_id);"
+        CREATE INDEX idx_grid_species_avibase ON grid_species(avibase_id);
+
+        CREATE TABLE grid_species_monthly (
+            h3_cell BIGINT NOT NULL,
+            avibase_id TEXT NOT NULL,
+            month INTEGER NOT NULL CHECK(month >= 1 AND month <= 12),
+            observations INTEGER NOT NULL CHECK(observations >= 0),
+            checklists INTEGER NOT NULL CHECK(checklists >= 0),
+            frequency REAL NOT NULL CHECK(frequency >= 0.0 AND frequency <= 1.0),
+            PRIMARY KEY (h3_cell, avibase_id, month),
+            FOREIGN KEY (h3_cell, avibase_id) REFERENCES grid_species(h3_cell, avibase_id)
+        );
+
+        CREATE INDEX idx_grid_species_monthly_cell ON grid_species_monthly(h3_cell);
+        CREATE INDEX idx_grid_species_monthly_month ON grid_species_monthly(month);
+
+        CREATE TABLE grid_species_yearly (
+            h3_cell BIGINT NOT NULL,
+            avibase_id TEXT NOT NULL,
+            year INTEGER NOT NULL CHECK(year >= 1900 AND year <= 2100),
+            observations INTEGER NOT NULL CHECK(observations >= 0),
+            checklists INTEGER NOT NULL CHECK(checklists >= 0),
+            frequency REAL NOT NULL CHECK(frequency >= 0.0 AND frequency <= 1.0),
+            PRIMARY KEY (h3_cell, avibase_id, year),
+            FOREIGN KEY (h3_cell, avibase_id) REFERENCES grid_species(h3_cell, avibase_id)
+        );
+
+        CREATE INDEX idx_grid_species_yearly_cell ON grid_species_yearly(h3_cell);
+        CREATE INDEX idx_grid_species_yearly_year ON grid_species_yearly(year);
+
+        CREATE TABLE grid_species_quarterly (
+            h3_cell BIGINT NOT NULL,
+            avibase_id TEXT NOT NULL,
+            quarter INTEGER NOT NULL CHECK(quarter >= 1 AND quarter <= 4),
+            observations INTEGER NOT NULL CHECK(observations >= 0),
+            checklists INTEGER NOT NULL CHECK(checklists >= 0),
+            frequency REAL NOT NULL CHECK(frequency >= 0.0 AND frequency <= 1.0),
+            PRIMARY KEY (h3_cell, avibase_id, quarter),
+            FOREIGN KEY (h3_cell, avibase_id) REFERENCES grid_species(h3_cell, avibase_id)
+        );
+
+        CREATE INDEX idx_grid_species_quarterly_cell ON grid_species_quarterly(h3_cell);
+        CREATE INDEX idx_grid_species_quarterly_quarter ON grid_species_quarterly(quarter);"
     )?;
     Ok(())
 }
@@ -250,8 +327,8 @@ fn insert_grid_data(
             "INSERT INTO grid_species (h3_cell, avibase_id, \
              yearly_frequency, total_observations, total_checklists, \
              first_observation, last_observation, confidence_tier, confidence_boost, \
-             monthly_frequency_json, monthly_observations_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             quality_score, high_quality_obs, low_quality_obs) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
 
         for cell in grid_cells {
@@ -268,9 +345,85 @@ fn insert_grid_data(
                     sp.last_observation.to_string(),
                     &sp.confidence_tier,
                     sp.confidence_boost,
-                    serde_json::to_string(&sp.monthly_frequency)?,
-                    serde_json::to_string(&sp.monthly_observations)?,
+                    sp.quality_score,
+                    sp.high_quality_obs,
+                    sp.low_quality_obs,
                 ])?;
+            }
+        }
+    }
+
+    // Insert grid_species_monthly
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO grid_species_monthly (h3_cell, avibase_id, month, observations, checklists, frequency) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )?;
+
+        for cell in grid_cells {
+            let h3_i64 = grid.cell_to_i64(cell.h3_cell);
+
+            for sp in &cell.species {
+                for monthly in &sp.monthly_data {
+                    stmt.execute(params![
+                        h3_i64,
+                        &sp.avibase_id,
+                        monthly.month,
+                        monthly.observations,
+                        monthly.checklists,
+                        monthly.frequency,
+                    ])?;
+                }
+            }
+        }
+    }
+
+    // Insert grid_species_yearly
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO grid_species_yearly (h3_cell, avibase_id, year, observations, checklists, frequency) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )?;
+
+        for cell in grid_cells {
+            let h3_i64 = grid.cell_to_i64(cell.h3_cell);
+
+            for sp in &cell.species {
+                for yearly in &sp.yearly_data {
+                    stmt.execute(params![
+                        h3_i64,
+                        &sp.avibase_id,
+                        yearly.year,
+                        yearly.observations,
+                        yearly.checklists,
+                        yearly.frequency,
+                    ])?;
+                }
+            }
+        }
+    }
+
+    // Insert grid_species_quarterly
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO grid_species_quarterly (h3_cell, avibase_id, quarter, observations, checklists, frequency) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )?;
+
+        for cell in grid_cells {
+            let h3_i64 = grid.cell_to_i64(cell.h3_cell);
+
+            for sp in &cell.species {
+                for quarterly in &sp.quarterly_data {
+                    stmt.execute(params![
+                        h3_i64,
+                        &sp.avibase_id,
+                        quarterly.quarter,
+                        quarterly.observations,
+                        quarterly.checklists,
+                        quarterly.frequency,
+                    ])?;
+                }
             }
         }
     }
