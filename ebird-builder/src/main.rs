@@ -4,14 +4,16 @@ mod db;
 mod density_loader;
 mod ebird;
 mod h3;
+mod temp_storage;
 
 use anyhow::Result;
 use clap::Parser;
 use log::info;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
 use config::PackManifest;
 use ebird::EBirdRecord;
@@ -22,7 +24,7 @@ use h3o::CellIndex;
 #[command(name = "birdnetpi-ebird-pack")]
 #[command(about = "Generate H3 grid region packs from eBird data for BirdNET-Pi")]
 struct Cli {
-    /// Input CSV file (eBird data)
+    /// Input tarball (eBird data)
     #[arg(short, long)]
     input: PathBuf,
 
@@ -55,6 +57,18 @@ struct Cli {
     region_filter: Option<String>,
 }
 
+/// Metadata for a region's aggregator
+struct RegionAggregator {
+    region_id: String,
+    release_name: String,
+    h3_resolution: u8,
+    boundary_cells: HashSet<CellIndex>,
+    boundary_resolution: h3o::Resolution,
+    aggregator: H3Aggregator,
+    total_checklists: HashSet<String>,
+    total_observations: usize,
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -65,7 +79,24 @@ fn main() -> Result<()> {
     let manifest_file = File::open(&cli.manifest)?;
     let manifest: PackManifest = serde_json::from_reader(manifest_file)?;
 
-    info!("Found {} regions in manifest", manifest.regions.len());
+    // Apply region filter if specified
+    let regions_to_process: Vec<_> = manifest
+        .regions
+        .iter()
+        .filter(|r| {
+            if let Some(ref filter) = cli.region_filter {
+                r.region_id.starts_with(filter)
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    info!(
+        "Processing {} regions (of {} total)",
+        regions_to_process.len(),
+        manifest.regions.len()
+    );
 
     // Load avibase ID mapping
     info!("Loading avibase ID mapping from {:?}", cli.avilistr);
@@ -87,18 +118,17 @@ fn main() -> Result<()> {
         None
     };
 
-    // Process each region
-    for region in &manifest.regions {
-        // Apply region filter if specified
-        if let Some(ref filter) = cli.region_filter {
-            if !region.region_id.starts_with(filter) {
-                continue;
-            }
-        }
+    // ========================================================================
+    // PHASE 1: Create all aggregators in memory (one per region)
+    // ========================================================================
+    info!("\n=== Phase 1: Initializing {} aggregators ===", regions_to_process.len());
 
-        info!("Processing region: {}", region.region_id);
+    let mut region_aggregators: Vec<RegionAggregator> = Vec::new();
 
-        // Parse H3 boundary cells for this region (used for filtering observations)
+    for region in &regions_to_process {
+        info!("  Initializing aggregator for region: {}", region.region_id);
+
+        // Parse H3 boundary cells for this region
         let boundary_cells: Result<HashSet<CellIndex>, _> = region
             .h3_cells
             .iter()
@@ -106,14 +136,12 @@ fn main() -> Result<()> {
             .collect();
         let boundary_cells = boundary_cells?;
 
-        // Get the boundary resolution (resolution of the cells we're filtering against)
+        // Get the boundary resolution
         let boundary_resolution = boundary_cells
             .iter()
             .next()
             .map(|cell| cell.resolution())
             .unwrap_or(h3o::Resolution::Two);
-
-        info!("  Region has {} boundary cells at resolution {}", boundary_cells.len(), u8::from(boundary_resolution));
 
         // Determine H3 resolution from first pack (for aggregation)
         let h3_resolution = region.packs.first().map(|p| p.data_resolution).unwrap_or(7);
@@ -127,120 +155,253 @@ fn main() -> Result<()> {
                 h3_resolution,
             )?
         } else {
-            std::collections::HashMap::new()
+            HashMap::new()
         };
 
         // Create H3 aggregator with sampling data
-        let mut aggregator = if sampling_data.is_empty() {
+        let aggregator = if sampling_data.is_empty() {
             H3Aggregator::new(h3_resolution, avibase_mapping.clone())?
         } else {
             H3Aggregator::new_with_sampling(h3_resolution, sampling_data, avibase_mapping.clone())?
         };
-        let mut total_checklists = HashSet::new();
-        let mut total_observations = 0;
 
-        // Process CSV file
-        let file = File::open(&cli.input)?;
-        let mut rdr = csv::ReaderBuilder::new().delimiter(b'\t').from_reader(file);
-
-        let mut record_count = 0;
-        let mut filtered_count = 0;
-        let mut h3_check_count = 0;
-
-        for result in rdr.deserialize() {
-            let record: EBirdRecord = result?;
-            record_count += 1;
-
-            if record_count % 100000 == 0 {
-                info!(
-                    "  Processed {} records ({} filtered)",
-                    record_count, filtered_count
-                );
-            }
-
-            // Apply basic filters
-            if !record.is_approved() {
-                filtered_count += 1;
-                continue;
-            }
-            if !record.is_complete_checklist() {
-                filtered_count += 1;
-                continue;
-            }
-            if !record.is_native() {
-                filtered_count += 1;
-                continue;
-            }
-            if !record.is_species() {
-                filtered_count += 1;
-                continue;
-            }
-
-            // Date filter
-            let date = match record.parse_date() {
-                Ok(d) => d,
-                Err(_) => {
-                    filtered_count += 1;
-                    continue;
-                }
-            };
-
-            if date < date_start || date > date_end {
-                filtered_count += 1;
-                continue;
-            }
-
-            // H3 cell filter - check if observation falls within any boundary cell
-            h3_check_count += 1;
-            let obs_latlng = h3o::LatLng::new(record.latitude, record.longitude)?;
-            let obs_boundary_cell = obs_latlng.to_cell(boundary_resolution);
-
-            // Debug first few cells
-            if h3_check_count <= 5 {
-                info!("  [DEBUG] Observation at ({}, {}): cell={:x}, expected={:x}",
-                    record.latitude, record.longitude,
-                    u64::from(obs_boundary_cell),
-                    u64::from(*boundary_cells.iter().next().unwrap()));
-            }
-
-            if !boundary_cells.contains(&obs_boundary_cell) {
-                filtered_count += 1;
-                continue;
-            }
-
-            // Convert to data resolution for aggregation
-            let _obs_cell = obs_latlng.to_cell(h3o::Resolution::try_from(h3_resolution)?);
-
-            // Track totals
-            total_checklists.insert(record.get_checklist_id());
-            total_observations += 1;
-
-            // Add to aggregator
-            aggregator.add_record(&record)?;
-        }
+        region_aggregators.push(RegionAggregator {
+            region_id: region.region_id.clone(),
+            release_name: region.release_name.clone(),
+            h3_resolution,
+            boundary_cells,
+            boundary_resolution,
+            aggregator,
+            total_checklists: HashSet::new(),
+            total_observations: 0,
+        });
 
         info!(
-            "  Finished: {} records processed, {} passed filters to H3 check, {} in region",
-            record_count, h3_check_count, total_observations
+            "    ✓ Region {} has {} boundary cells at resolution {}",
+            region.region_id,
+            region_aggregators.last().unwrap().boundary_cells.len(),
+            u8::from(boundary_resolution)
         );
+    }
 
-        if total_observations == 0 {
-            info!("  Skipping region {} (no observations)", region.region_id);
+    info!("\n✓ All {} aggregators initialized", region_aggregators.len());
+    info!("  Estimated memory usage: ~{} MB", region_aggregators.len() * 150);
+
+    // ========================================================================
+    // PHASE 2: Single pass through dataset - route to all matching aggregators
+    // ========================================================================
+    info!("\n=== Phase 2: Single-pass dataset processing ===");
+    info!("Opening tarball: {:?}", cli.input);
+
+    let file = File::open(&cli.input)?;
+    let mut tar = tar::Archive::new(file);
+
+    // Find .gz entry
+    info!("Extracting from tarball...");
+    let mut found_entry = None;
+    for entry in tar.entries()? {
+        let entry = entry?;
+        let path = entry.path()?;
+        if path.extension().and_then(|s| s.to_str()) == Some("gz") {
+            info!("  Found: {}", path.display());
+            found_entry = Some(entry);
+            break;
+        }
+    }
+
+    let entry = found_entry.ok_or_else(|| anyhow::anyhow!("No .gz file found in tarball"))?;
+
+    info!("Decompressing gzip and parsing CSV with parallel processing...");
+
+    let gz_decoder = flate2::read::GzDecoder::new(entry);
+    let mut rdr = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .from_reader(gz_decoder);
+
+    // Wrap aggregators in Arc<Mutex<>> for thread safety
+    let shared_aggregators: Vec<Arc<Mutex<RegionAggregator>>> = region_aggregators
+        .into_iter()
+        .map(|agg| Arc::new(Mutex::new(agg)))
+        .collect();
+
+    // Shared counters
+    let record_count = Arc::new(Mutex::new(0u64));
+    let filtered_count = Arc::new(Mutex::new(0u64));
+    let routed_count = Arc::new(Mutex::new(0u64));
+    let last_report = Arc::new(Mutex::new(std::time::Instant::now()));
+
+    // Create channel for batched records
+    let (tx, rx) = crossbeam_channel::bounded::<Vec<EBirdRecord>>(100);
+
+    // Clone references for the processing thread
+    let proc_aggregators = shared_aggregators.clone();
+    let proc_record_count = record_count.clone();
+    let proc_filtered_count = filtered_count.clone();
+    let proc_routed_count = routed_count.clone();
+    let proc_last_report = last_report.clone();
+
+    // Spawn processing thread pool
+    let processor_handle = std::thread::spawn(move || {
+        use rayon::prelude::*;
+
+        rx.into_iter().par_bridge().for_each(|batch| {
+            let batch_size = batch.len();
+            let mut batch_filtered = 0;
+            let mut batch_routed = 0;
+
+            for record in batch {
+                // Apply ONLY critical filters - quality is tracked per-observation
+                // Date filter
+                let date = match record.parse_date() {
+                    Ok(d) => d,
+                    Err(_) => {
+                        batch_filtered += 1;
+                        continue;
+                    }
+                };
+
+                if date < date_start || date > date_end {
+                    batch_filtered += 1;
+                    continue;
+                }
+
+                // Convert observation to H3 coordinates once
+                let obs_latlng = match h3o::LatLng::new(record.latitude, record.longitude) {
+                    Ok(ll) => ll,
+                    Err(_) => {
+                        batch_filtered += 1;
+                        continue;
+                    }
+                };
+
+                // Route to ALL matching region aggregators
+                for shared_agg in &proc_aggregators {
+                    let mut agg = shared_agg.lock().unwrap();
+                    let obs_boundary_cell = obs_latlng.to_cell(agg.boundary_resolution);
+
+                    if agg.boundary_cells.contains(&obs_boundary_cell) {
+                        // Track totals
+                        agg.total_checklists.insert(record.get_checklist_id());
+                        agg.total_observations += 1;
+
+                        // Add to aggregator
+                        if let Err(e) = agg.aggregator.add_record(&record) {
+                            log::error!("Error adding record: {}", e);
+                        }
+                        batch_routed += 1;
+                    }
+                }
+            }
+
+            // Update shared counters
+            {
+                let mut count = proc_record_count.lock().unwrap();
+                *count += batch_size as u64;
+                let current_count = *count;
+
+                let mut filtered = proc_filtered_count.lock().unwrap();
+                *filtered += batch_filtered;
+
+                let mut routed = proc_routed_count.lock().unwrap();
+                *routed += batch_routed;
+                let current_routed = *routed;
+
+                // Progress reporting
+                if current_count % 1_000_000 < batch_size as u64 {
+                    let mut last_rep = proc_last_report.lock().unwrap();
+                    let elapsed = last_rep.elapsed().as_secs_f64();
+                    let rate = 1_000_000.0 / elapsed;
+                    info!(
+                        "  Processed {} records ({:.0} rec/sec, {} routed)",
+                        current_count, rate, current_routed
+                    );
+                    *last_rep = std::time::Instant::now();
+                }
+            }
+        });
+    });
+
+    // Read and send batches from main thread
+    let mut batch = Vec::with_capacity(10_000);
+
+    for result in rdr.deserialize() {
+        let record: EBirdRecord = result?;
+        batch.push(record);
+
+        if batch.len() >= 10_000 {
+            if tx.send(batch.clone()).is_err() {
+                break;  // Receiver dropped
+            }
+            batch.clear();
+        }
+    }
+
+    // Send final partial batch
+    if !batch.is_empty() {
+        let _ = tx.send(batch);
+    }
+
+    // Drop sender to signal end
+    drop(tx);
+
+    // Wait for processing to complete
+    processor_handle.join().expect("Processor thread panicked");
+
+    // Extract final counts
+    let final_record_count = *record_count.lock().unwrap();
+    let final_filtered_count = *filtered_count.lock().unwrap();
+    let final_routed_count = *routed_count.lock().unwrap();
+
+    // Unwrap aggregators from Arc<Mutex<>>
+    let mut region_aggregators: Vec<RegionAggregator> = shared_aggregators
+        .into_iter()
+        .map(|arc| {
+            Arc::try_unwrap(arc)
+                .ok()
+                .expect("Failed to unwrap Arc - still has multiple references")
+                .into_inner()
+                .expect("Failed to unwrap Mutex - poisoned")
+        })
+        .collect();
+
+    info!("\n✓ Dataset pass complete!");
+    info!(
+        "  Total records: {} ({} filtered out)",
+        final_record_count, final_filtered_count
+    );
+    info!("  Total observations routed: {}", final_routed_count);
+
+    // ========================================================================
+    // PHASE 3: Finalize and write all region databases
+    // ========================================================================
+    info!("\n=== Phase 3: Finalizing and writing region databases ===");
+
+    let default_filters = config::FilterConfig {
+        approved_only: true,
+        complete_checklists_only: true,
+        native_species_only: true,
+        min_observations: 5,
+        min_checklists: 3,
+        min_yearly_frequency: 0.01,
+        deduplication: config::DeduplicationMode::GroupIdentifier,
+    };
+
+    for mut region_agg in region_aggregators {
+        info!("\nProcessing region: {}", region_agg.region_id);
+
+        if region_agg.total_observations == 0 {
+            info!("  ⚠ Skipping (no observations)");
             continue;
         }
 
-        // Finalize aggregation with default filters
-        let default_filters = config::FilterConfig {
-            approved_only: true,
-            complete_checklists_only: true,
-            native_species_only: true,
-            min_observations: 5,
-            min_checklists: 3,
-            min_yearly_frequency: 0.01,
-            deduplication: config::DeduplicationMode::GroupIdentifier,
-        };
+        info!(
+            "  {} observations from {} checklists",
+            region_agg.total_observations,
+            region_agg.total_checklists.len()
+        );
 
-        let grid_cells = aggregator.finalize(&default_filters);
+        // Finalize aggregation
+        let grid_cells = region_agg.aggregator.finalize(&default_filters);
 
         let total_species: usize = grid_cells.iter().map(|c| c.species.len()).sum();
         info!(
@@ -251,10 +412,10 @@ fn main() -> Result<()> {
 
         // Create RegionConfig for database writing
         let region_config = config::RegionConfig {
-            region_id: region.region_id.clone(),
-            region_name: region.release_name.clone(),
+            region_id: region_agg.region_id.clone(),
+            region_name: region_agg.release_name.clone(),
             region_type: config::RegionType::Custom,
-            h3_resolution,
+            h3_resolution: region_agg.h3_resolution,
             bounding_box: config::BoundingBox {
                 min_latitude: -90.0,
                 max_latitude: 90.0,
@@ -265,26 +426,27 @@ fn main() -> Result<()> {
                 start: date_start,
                 end: date_end,
             },
-            filters: default_filters,
+            filters: default_filters.clone(),
         };
 
-        // Write to database
+        // Write to database (gzipped)
         let output_path = cli
             .output_dir
-            .join(format!("{}.db", region.release_name));
+            .join(format!("{}.db.gz", region_agg.release_name));
         info!("  Writing database to {:?}", output_path);
+
         db::write_region_pack(
             &output_path,
             &region_config,
             &grid_cells,
-            total_checklists.len(),
-            total_observations,
+            region_agg.total_checklists.len(),
+            region_agg.total_observations,
         )?;
 
-        info!("  ✓ Region {} complete", region.region_id);
+        info!("  ✓ Region {} complete", region_agg.region_id);
     }
 
-    info!("Done! All regions processed.");
+    info!("\n✓ Done! All regions processed.");
 
     Ok(())
 }

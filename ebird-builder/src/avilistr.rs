@@ -19,13 +19,13 @@ pub fn load_avibase_mapping(csv_path: &Path) -> Result<HashMap<String, String>> 
     for result in reader.records() {
         let record = result.context("Failed to read CSV record")?;
 
-        // CSV format: Scientific_name,AvibaseID,English_name_AviList,...
-        if record.len() < 2 {
+        // CSV format: Scientific_name,English_name_AviList,English_name_Clements,English_name_BirdLife,AvibaseID,...
+        if record.len() < 5 {
             continue; // Skip malformed records
         }
 
         let scientific_name = record[0].to_string();
-        let avibase_id = record[1].to_string();
+        let avibase_id = record[4].to_string(); // AvibaseID is column 5 (index 4)
 
         // Validate avibase_id format
         if !avibase_id.starts_with("avibase-") || avibase_id.len() != 16 {
@@ -57,15 +57,15 @@ mod tests {
         let mut temp_file = NamedTempFile::new()?;
         writeln!(
             temp_file,
-            "Scientific_name,AvibaseID,English_name_AviList,English_name_Clements_v2024,Species_code_Cornell_Lab,Birds_of_the_World_URL"
+            "Scientific_name,English_name_AviList,English_name_Clements_v2024,English_name_BirdLife_v9,AvibaseID"
         )?;
         writeln!(
             temp_file,
-            "Struthio camelus,avibase-2247CB05,Common Ostrich,Common Ostrich,ostric2,https://birdsoftheworld.org/bow/species/ostric2/"
+            "Struthio camelus,Common Ostrich,Common Ostrich,Common Ostrich,avibase-2247CB05"
         )?;
         writeln!(
             temp_file,
-            "Turdus migratorius,avibase-4A2E6B9F,American Robin,American Robin,amerob,https://birdsoftheworld.org/bow/species/amerob/"
+            "Turdus migratorius,American Robin,American Robin,American Robin,avibase-4A2E6B9F"
         )?;
         temp_file.flush()?;
 
@@ -87,9 +87,9 @@ mod tests {
     #[test]
     fn test_invalid_avibase_id_format() -> Result<()> {
         let mut temp_file = NamedTempFile::new()?;
-        writeln!(temp_file, "Scientific_name,AvibaseID")?;
-        writeln!(temp_file, "Invalid Species,invalid-format")?; // Wrong format
-        writeln!(temp_file, "Valid Species,avibase-12345678")?; // Valid
+        writeln!(temp_file, "Scientific_name,English_name_AviList,English_name_Clements_v2024,English_name_BirdLife_v9,AvibaseID")?;
+        writeln!(temp_file, "Invalid Species,Common,Common,Common,invalid-format")?; // Wrong format
+        writeln!(temp_file, "Valid Species,Common,Common,Common,avibase-12345678")?; // Valid
         temp_file.flush()?;
 
         let mapping = load_avibase_mapping(temp_file.path())?;

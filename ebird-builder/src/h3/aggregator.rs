@@ -35,6 +35,10 @@ pub struct ObservationEvent {
     pub checklist_id: String,
     #[allow(dead_code)]
     pub count: u32,
+    pub is_approved: bool,
+    pub is_complete_checklist: bool,
+    pub is_native: bool,
+    pub is_species: bool,
 }
 
 pub struct SpeciesData {
@@ -47,8 +51,36 @@ pub struct SpeciesData {
     pub last_observation: NaiveDate,
     pub confidence_tier: String,
     pub confidence_boost: f64,
-    pub monthly_frequency: [f64; 12],
-    pub monthly_observations: [u32; 12],
+    pub monthly_data: Vec<MonthlyData>,
+    pub yearly_data: Vec<YearlyData>,
+    pub quarterly_data: Vec<QuarterlyData>,
+    pub quality_score: f64,
+    pub high_quality_obs: u32,
+    pub low_quality_obs: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct MonthlyData {
+    pub month: u8,  // 1-12
+    pub observations: u32,
+    pub checklists: u32,
+    pub frequency: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct YearlyData {
+    pub year: u16,
+    pub observations: u32,
+    pub checklists: u32,
+    pub frequency: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct QuarterlyData {
+    pub quarter: u8,  // 1-4
+    pub observations: u32,
+    pub checklists: u32,
+    pub frequency: f64,
 }
 
 pub struct GridCellPack {
@@ -155,6 +187,10 @@ impl H3CellData {
             date,
             checklist_id: checklist_id.clone(),
             count: record.get_count(),
+            is_approved: record.is_approved(),
+            is_complete_checklist: record.is_complete_checklist(),
+            is_native: record.is_native(),
+            is_species: record.is_species(),
         });
         species.checklists.insert(checklist_id);
 
@@ -189,35 +225,47 @@ impl H3CellData {
                 let total_obs = acc.observations.len() as u32;
                 let total_lists = acc.checklists.len() as u32;
 
-                // Apply minimum thresholds
-                if total_obs < config.min_observations || total_lists < config.min_checklists {
-                    return None;
-                }
-
                 let yearly_frequency = if frequency_denominator > 0.0 {
                     total_lists as f64 / frequency_denominator
                 } else {
                     0.0
                 };
 
-                if yearly_frequency < config.min_yearly_frequency {
-                    return None;
-                }
+                // Check if species meets inclusion thresholds
+                let meets_thresholds = total_obs >= config.min_observations
+                    && total_lists >= config.min_checklists
+                    && yearly_frequency >= config.min_yearly_frequency;
 
-                // Compute monthly frequencies
+                // If species doesn't meet thresholds, still include with 'excluded' tier
+                let (confidence_tier, confidence_boost) = if !meets_thresholds {
+                    ("excluded".to_string(), 1.0)
+                } else {
+                    let (tier, base_boost) = classify_species(yearly_frequency);
+
+                    // Apply absence penalty if we have strong sampling evidence
+                    let absence_penalty = calculate_absence_penalty(
+                        total_sampled,
+                        yearly_frequency,
+                    );
+
+                    // Calculate quality score
+                    let (quality_score, _, _) = calculate_quality_score(&acc.observations);
+
+                    // Apply quality multiplier to confidence boost
+                    let quality_multiplier = 0.7 + (0.3 * quality_score); // 0.7-1.0 range
+                    let final_boost = base_boost * absence_penalty * quality_multiplier;
+
+                    (tier, final_boost)
+                };
+
+                // Compute temporal data (monthly, yearly, quarterly)
                 let monthly_data = compute_monthly_data(&acc.observations, total_complete);
+                let yearly_data = compute_yearly_data(&acc.observations, total_complete);
+                let quarterly_data = compute_quarterly_data(&acc.observations, total_complete);
 
-                // Classify confidence tier and get base boost
-                let (confidence_tier, base_confidence_boost) =
-                    classify_species(yearly_frequency);
-
-                // Apply absence penalty if we have strong sampling evidence
-                let absence_penalty = calculate_absence_penalty(
-                    total_sampled,
-                    yearly_frequency,
-                );
-
-                let final_confidence_boost = base_confidence_boost * absence_penalty;
+                // Calculate data quality score and counts
+                let (quality_score, high_quality_obs, low_quality_obs) =
+                    calculate_quality_score(&acc.observations);
 
                 // Look up avibase_id from scientific_name
                 let avibase_id = avibase_mapping
@@ -239,10 +287,14 @@ impl H3CellData {
                     total_checklists: total_lists,
                     first_observation: acc.observations.iter().map(|o| o.date).min().unwrap(),
                     last_observation: acc.observations.iter().map(|o| o.date).max().unwrap(),
-                    confidence_tier,
-                    confidence_boost: final_confidence_boost,
-                    monthly_frequency: monthly_data.0,
-                    monthly_observations: monthly_data.1,
+                    confidence_tier,  // From conditional logic above
+                    confidence_boost,  // From conditional logic above
+                    monthly_data,
+                    yearly_data,
+                    quarterly_data,
+                    quality_score,
+                    high_quality_obs,
+                    low_quality_obs,
                 })
             })
             .collect();
@@ -281,7 +333,7 @@ impl H3CellData {
 pub(crate) fn compute_monthly_data(
     observations: &[ObservationEvent],
     total_complete_checklists: f64,
-) -> ([f64; 12], [u32; 12]) {
+) -> Vec<MonthlyData> {
     let mut monthly_obs = [0u32; 12];
     let mut monthly_checklists: [HashSet<String>; 12] = Default::default();
 
@@ -291,15 +343,96 @@ pub(crate) fn compute_monthly_data(
         monthly_checklists[month].insert(obs.checklist_id.clone());
     }
 
-    let monthly_frequency = monthly_checklists.map(|set| {
-        if total_complete_checklists > 0.0 {
-            set.len() as f64 / total_complete_checklists
-        } else {
-            0.0
-        }
-    });
+    (1..=12)
+        .map(|month| {
+            let idx = (month - 1) as usize;
+            let checklists = monthly_checklists[idx].len() as u32;
+            let frequency = if total_complete_checklists > 0.0 {
+                checklists as f64 / total_complete_checklists
+            } else {
+                0.0
+            };
 
-    (monthly_frequency, monthly_obs)
+            MonthlyData {
+                month,
+                observations: monthly_obs[idx],
+                checklists,
+                frequency,
+            }
+        })
+        .filter(|m| m.observations > 0 || m.checklists > 0)
+        .collect()
+}
+
+pub(crate) fn compute_yearly_data(
+    observations: &[ObservationEvent],
+    total_complete_checklists: f64,
+) -> Vec<YearlyData> {
+    let mut yearly_data: HashMap<u16, (u32, HashSet<String>)> = HashMap::new();
+
+    for obs in observations {
+        let year = obs.date.year() as u16;
+        let entry = yearly_data.entry(year).or_insert((0, HashSet::new()));
+        entry.0 += 1; // observations
+        entry.1.insert(obs.checklist_id.clone()); // checklists
+    }
+
+    let mut results: Vec<YearlyData> = yearly_data
+        .into_iter()
+        .map(|(year, (observations, checklists))| {
+            let checklists_count = checklists.len() as u32;
+            let frequency = if total_complete_checklists > 0.0 {
+                checklists_count as f64 / total_complete_checklists
+            } else {
+                0.0
+            };
+
+            YearlyData {
+                year,
+                observations,
+                checklists: checklists_count,
+                frequency,
+            }
+        })
+        .collect();
+
+    results.sort_by_key(|y| y.year);
+    results
+}
+
+pub(crate) fn compute_quarterly_data(
+    observations: &[ObservationEvent],
+    total_complete_checklists: f64,
+) -> Vec<QuarterlyData> {
+    let mut quarterly_data: [u32; 4] = [0; 4];
+    let mut quarterly_checklists: [HashSet<String>; 4] = Default::default();
+
+    for obs in observations {
+        // Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec
+        let quarter = ((obs.date.month0() / 3) as usize).min(3);
+        quarterly_data[quarter] += 1;
+        quarterly_checklists[quarter].insert(obs.checklist_id.clone());
+    }
+
+    (1..=4)
+        .map(|quarter| {
+            let idx = (quarter - 1) as usize;
+            let checklists = quarterly_checklists[idx].len() as u32;
+            let frequency = if total_complete_checklists > 0.0 {
+                checklists as f64 / total_complete_checklists
+            } else {
+                0.0
+            };
+
+            QuarterlyData {
+                quarter,
+                observations: quarterly_data[idx],
+                checklists,
+                frequency,
+            }
+        })
+        .filter(|q| q.observations > 0 || q.checklists > 0)
+        .collect()
 }
 
 pub(crate) fn classify_species(yearly_frequency: f64) -> (String, f64) {
@@ -342,4 +475,41 @@ pub(crate) fn calculate_absence_penalty(
 
     // No penalty - return 1.0 (no modification to boost)
     1.0
+}
+
+/// Calculate data quality score based on observation characteristics
+///
+/// Returns (quality_score, high_quality_count, low_quality_count)
+///
+/// Quality criteria (all must be true for high quality):
+/// - Approved observation
+/// - Complete checklist
+/// - Native species
+/// - Species-level identification
+///
+/// Quality score ranges from 0.0 (all low quality) to 1.0 (all high quality)
+pub(crate) fn calculate_quality_score(observations: &[ObservationEvent]) -> (f64, u32, u32) {
+    let mut high_quality = 0u32;
+    let mut low_quality = 0u32;
+
+    for obs in observations {
+        if obs.is_approved
+            && obs.is_complete_checklist
+            && obs.is_native
+            && obs.is_species
+        {
+            high_quality += 1;
+        } else {
+            low_quality += 1;
+        }
+    }
+
+    let total = (high_quality + low_quality) as f64;
+    let quality_score = if total > 0.0 {
+        high_quality as f64 / total
+    } else {
+        0.0
+    };
+
+    (quality_score, high_quality, low_quality)
 }

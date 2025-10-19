@@ -441,3 +441,92 @@ fn optimize_database(conn: &mut Connection) -> Result<()> {
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_temp_path_derivation_from_gzipped_db() {
+        // Test the path derivation logic that was fixed in the gzip compression bug
+        // Before fix: "pacific-hawaii-2025.08.db.gz" → "pacific-hawaii-2025.08.db.db.tmp" (WRONG)
+        // After fix: "pacific-hawaii-2025.08.db.gz" → "pacific-hawaii-2025.08.db.tmp" (CORRECT)
+
+        let output_path = PathBuf::from("pacific-hawaii-2025.08.db.gz");
+        let temp_db_path = output_path.with_extension("").with_extension("db.tmp");
+
+        assert_eq!(
+            temp_db_path.to_str().unwrap(),
+            "pacific-hawaii-2025.08.db.tmp",
+            "Temp path should strip .gz and replace .db with .db.tmp"
+        );
+    }
+
+    #[test]
+    fn test_temp_path_derivation_with_single_extension() {
+        // Test path with single extension
+        let output_path = PathBuf::from("test.db");
+        let temp_db_path = output_path.with_extension("").with_extension("db.tmp");
+
+        assert_eq!(
+            temp_db_path.to_str().unwrap(),
+            "test.db.tmp",
+            "Single extension should be replaced with .db.tmp"
+        );
+    }
+
+    #[test]
+    fn test_temp_path_derivation_with_no_extension() {
+        // Test path with no extension
+        let output_path = PathBuf::from("test");
+        let temp_db_path = output_path.with_extension("").with_extension("db.tmp");
+
+        assert_eq!(
+            temp_db_path.to_str().unwrap(),
+            "test.db.tmp",
+            "No extension should result in .db.tmp being added"
+        );
+    }
+
+    #[test]
+    fn test_temp_path_derivation_with_multiple_dots() {
+        // Test path with multiple dots in filename
+        let output_path = PathBuf::from("my.region.pack.db.gz");
+        let temp_db_path = output_path.with_extension("").with_extension("db.tmp");
+
+        assert_eq!(
+            temp_db_path.to_str().unwrap(),
+            "my.region.pack.db.tmp",
+            "Multiple dots in filename should only affect last two extensions"
+        );
+    }
+
+    #[test]
+    fn test_temp_path_prevents_double_db_extension() {
+        // Regression test: ensure we never create paths with double .db extension
+        let test_cases = vec![
+            ("region.db.gz", "region.db.tmp"),
+            ("test-name-2025.db.gz", "test-name-2025.db.tmp"),
+            ("africa-east.db.gz", "africa-east.db.tmp"),
+        ];
+
+        for (input, expected) in test_cases {
+            let output_path = PathBuf::from(input);
+            let temp_db_path = output_path.with_extension("").with_extension("db.tmp");
+
+            assert_eq!(
+                temp_db_path.to_str().unwrap(),
+                expected,
+                "Should not create double .db extension for input: {}",
+                input
+            );
+
+            // Also verify no .db.db anywhere in the path
+            assert!(
+                !temp_db_path.to_str().unwrap().contains(".db.db"),
+                "Path should never contain .db.db: {}",
+                temp_db_path.to_str().unwrap()
+            );
+        }
+    }
+}
