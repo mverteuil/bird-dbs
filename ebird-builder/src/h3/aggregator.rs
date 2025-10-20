@@ -255,7 +255,12 @@ impl H3CellData {
                     let quality_multiplier = 0.7 + (0.3 * quality_score); // 0.7-1.0 range
                     let final_boost = base_boost * absence_penalty * quality_multiplier;
 
-                    (tier, final_boost)
+                    // Clamp to database constraint range (0.8-2.0)
+                    // Min possible: 1.0 * 0.8 * 0.7 = 0.56 (needs clamping)
+                    // Max possible: 1.3 * 1.0 * 1.0 = 1.3 (within range)
+                    let clamped_boost = final_boost.clamp(0.8, 2.0);
+
+                    (tier, clamped_boost)
                 };
 
                 // Compute temporal data (monthly, yearly, quarterly)

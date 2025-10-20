@@ -620,4 +620,228 @@ mod tests {
         // Should have positive boost (no penalty)
         assert!(common_species.confidence_boost >= 1.0);
     }
+
+    // Tests for confidence_boost clamping (regression tests for CHECK constraint bug)
+
+    #[test]
+    fn test_confidence_boost_minimum_edge_case() {
+        use std::collections::HashMap;
+
+        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+
+        // Create worst-case scenario for confidence_boost:
+        // - Very rare species (frequency ~0.01) → base_boost = 1.0
+        // - Strong absence penalty → absence_penalty = 0.8
+        // - All low-quality observations → quality_multiplier = 0.7
+        // - Expected: 1.0 * 0.8 * 0.7 = 0.56 → clamped to 0.8
+
+        // Add exactly 15 observations from 3 checklists out of 1500 sampled
+        // This gives frequency = 3/1500 = 0.002 (rare, but meets min threshold)
+        for i in 0..3 {
+            for j in 0..5 {
+                let mut record = sample_record();
+                record.sampling_event_id = format!("S{}", i);
+                record.scientific_name = "Test Species".to_string();
+                record.common_name = "Test Bird".to_string();
+                // Make all observations low quality
+                record.approved = "0".to_string();  // Not approved
+                record.all_species_reported = "0".to_string();  // Not complete
+                aggregator.add_record(&record).unwrap();
+            }
+        }
+
+        let cell = aggregator
+            .grid
+            .lat_lon_to_cell(sample_record().latitude, sample_record().longitude)
+            .unwrap();
+
+        // Create sampling data showing strong absence signal (1500 sampled checklists)
+        let mut sampling_data = HashMap::new();
+        sampling_data.insert(cell, 1500);
+
+        let mut aggregator_with_sampling =
+            H3Aggregator::new_with_sampling(8, sampling_data, test_avibase_mapping()).unwrap();
+
+        for i in 0..3 {
+            for j in 0..5 {
+                let mut record = sample_record();
+                record.sampling_event_id = format!("S{}", i);
+                record.scientific_name = "Test Species".to_string();
+                record.common_name = "Test Bird".to_string();
+                record.approved = "0".to_string();
+                record.all_species_reported = "0".to_string();
+                aggregator_with_sampling.add_record(&record).unwrap();
+            }
+        }
+
+        let mut config = default_filter_config();
+        config.min_observations = 5;  // Allow species to pass
+        config.min_checklists = 3;
+
+        let packs = aggregator_with_sampling.finalize(&config);
+        assert_eq!(packs.len(), 1);
+
+        let species_list = &packs[0].species;
+        let test_species = species_list
+            .iter()
+            .find(|s| s.scientific_name == "Test Species")
+            .expect("Should find the test species");
+
+        // CRITICAL: confidence_boost must be >= 0.8 (database constraint)
+        assert!(
+            test_species.confidence_boost >= 0.8,
+            "confidence_boost {} must be >= 0.8 (database constraint)",
+            test_species.confidence_boost
+        );
+
+        // Should be clamped to exactly 0.8 in this worst case
+        assert!(
+            (test_species.confidence_boost - 0.8).abs() < 0.01,
+            "Expected confidence_boost to be clamped to ~0.8, got {}",
+            test_species.confidence_boost
+        );
+    }
+
+    #[test]
+    fn test_confidence_boost_maximum_edge_case() {
+        use std::collections::HashMap;
+
+        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+
+        // Create best-case scenario for confidence_boost:
+        // - Very common species (frequency near 1.0) → base_boost = 1.3 (MAX_BOOST)
+        // - No absence penalty → absence_penalty = 1.0
+        // - All high-quality observations → quality_multiplier = 1.0
+        // - Expected: 1.3 * 1.0 * 1.0 = 1.3 (within 0.8-2.0 range)
+
+        // Add 100 observations from 100 checklists
+        for i in 0..100 {
+            let mut record = sample_record();
+            record.sampling_event_id = format!("S{}", i);
+            record.scientific_name = "Very Common Species".to_string();
+            record.common_name = "Very Common Bird".to_string();
+            // Ensure high quality
+            record.approved = "1".to_string();
+            record.all_species_reported = "1".to_string();
+            record.category = Some("species".to_string());
+            record.exotic_code = None;
+            aggregator.add_record(&record).unwrap();
+        }
+
+        let config = default_filter_config();
+        let packs = aggregator.finalize(&config);
+
+        assert_eq!(packs.len(), 1);
+
+        let species_list = &packs[0].species;
+        let test_species = species_list
+            .iter()
+            .find(|s| s.scientific_name == "Very Common Species")
+            .expect("Should find the very common species");
+
+        // CRITICAL: confidence_boost must be <= 2.0 (database constraint)
+        assert!(
+            test_species.confidence_boost <= 2.0,
+            "confidence_boost {} must be <= 2.0 (database constraint)",
+            test_species.confidence_boost
+        );
+
+        // Should be around 1.3 (MAX_BOOST) with perfect quality
+        assert!(
+            test_species.confidence_boost >= 1.0 && test_species.confidence_boost <= 1.35,
+            "Expected confidence_boost to be around 1.3, got {}",
+            test_species.confidence_boost
+        );
+    }
+
+    #[test]
+    fn test_confidence_boost_always_in_valid_range() {
+        use std::collections::HashMap;
+
+        // Test various combinations to ensure all fall within 0.8-2.0 range
+        let test_cases = vec![
+            // (checklists, is_high_quality, has_sampling, expected_min, expected_max)
+            (2, true, false, 0.8, 2.0),   // Very rare, high quality, no sampling
+            (2, false, false, 0.8, 2.0),  // Very rare, low quality, no sampling
+            (5, true, true, 0.8, 2.0),    // Rare, high quality, with sampling
+            (5, false, true, 0.8, 2.0),   // Rare, low quality, with sampling
+            (50, true, true, 0.8, 2.0),   // Common, high quality, with sampling
+            (100, true, false, 0.8, 2.0), // Very common, high quality, no sampling
+        ];
+
+        for (checklist_count, is_high_quality, has_sampling, min_expected, max_expected) in test_cases {
+            let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+
+            // Add observations
+            for i in 0..checklist_count {
+                let mut record = sample_record();
+                record.sampling_event_id = format!("S{}", i);
+                record.scientific_name = "Test Species".to_string();
+
+                if is_high_quality {
+                    record.approved = "1".to_string();
+                    record.all_species_reported = "1".to_string();
+                    record.category = Some("species".to_string());
+                } else {
+                    record.approved = "0".to_string();
+                    record.all_species_reported = "0".to_string();
+                }
+
+                aggregator.add_record(&record).unwrap();
+            }
+
+            let cell = aggregator
+                .grid
+                .lat_lon_to_cell(sample_record().latitude, sample_record().longitude)
+                .unwrap();
+
+            let packs = if has_sampling {
+                let mut sampling_data = HashMap::new();
+                sampling_data.insert(cell, 1500);
+                let mut agg_with_sampling =
+                    H3Aggregator::new_with_sampling(8, sampling_data, test_avibase_mapping()).unwrap();
+
+                for i in 0..checklist_count {
+                    let mut record = sample_record();
+                    record.sampling_event_id = format!("S{}", i);
+                    record.scientific_name = "Test Species".to_string();
+
+                    if is_high_quality {
+                        record.approved = "1".to_string();
+                        record.all_species_reported = "1".to_string();
+                        record.category = Some("species".to_string());
+                    } else {
+                        record.approved = "0".to_string();
+                        record.all_species_reported = "0".to_string();
+                    }
+
+                    agg_with_sampling.add_record(&record).unwrap();
+                }
+
+                let mut config = default_filter_config();
+                config.min_observations = 1;
+                config.min_checklists = 1;
+                agg_with_sampling.finalize(&config)
+            } else {
+                let mut config = default_filter_config();
+                config.min_observations = 1;
+                config.min_checklists = 1;
+                aggregator.finalize(&config)
+            };
+
+            let species = &packs[0].species[0];
+            assert!(
+                species.confidence_boost >= min_expected,
+                "Case (checklists={}, quality={}, sampling={}): confidence_boost {} < {}",
+                checklist_count, is_high_quality, has_sampling,
+                species.confidence_boost, min_expected
+            );
+            assert!(
+                species.confidence_boost <= max_expected,
+                "Case (checklists={}, quality={}, sampling={}): confidence_boost {} > {}",
+                checklist_count, is_high_quality, has_sampling,
+                species.confidence_boost, max_expected
+            );
+        }
+    }
 }

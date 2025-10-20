@@ -386,6 +386,9 @@ fn main() -> Result<()> {
         deduplication: config::DeduplicationMode::GroupIdentifier,
     };
 
+    // Track actual file sizes for manifest update
+    let mut region_sizes: HashMap<String, f64> = HashMap::new();
+
     for mut region_agg in region_aggregators {
         info!("\nProcessing region: {}", region_agg.region_id);
 
@@ -443,10 +446,54 @@ fn main() -> Result<()> {
             region_agg.total_observations,
         )?;
 
+        // Track actual compressed file size
+        if let Ok(metadata) = std::fs::metadata(&output_path) {
+            let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
+            region_sizes.insert(region_agg.region_id.clone(), size_mb);
+            info!("  File size: {:.2} MB", size_mb);
+        }
+
         info!("  ✓ Region {} complete", region_agg.region_id);
     }
 
-    info!("\n✓ Done! All regions processed.");
+    // ========================================================================
+    // PHASE 4: Update manifest with actual file sizes
+    // ========================================================================
+    info!("\n=== Phase 4: Updating manifest with actual file sizes ===");
+
+    let mut updated_manifest = manifest.clone();
+    let mut updated_count = 0;
+
+    for region in &mut updated_manifest.regions {
+        if let Some(&actual_size_mb) = region_sizes.get(&region.region_id) {
+            let old_estimate = region.size_mb;
+            region.size_mb = actual_size_mb;
+            updated_count += 1;
+            info!(
+                "  Updated {}: {:.2} MB (was {:.2} MB estimated)",
+                region.region_id,
+                actual_size_mb,
+                old_estimate
+            );
+        }
+    }
+
+    info!(
+        "\n  Updated {} of {} regions with actual sizes",
+        updated_count,
+        updated_manifest.regions.len()
+    );
+
+    // Write updated manifest
+    let updated_manifest_path = cli.manifest.with_file_name("pack_manifest_updated.json");
+    info!("  Writing updated manifest to {:?}", updated_manifest_path);
+
+    let manifest_file = File::create(&updated_manifest_path)?;
+    serde_json::to_writer_pretty(manifest_file, &updated_manifest)?;
+
+    info!("  ✓ Manifest updated successfully");
+
+    info!("\n✓ Done! All regions processed and manifest updated.");
 
     Ok(())
 }
