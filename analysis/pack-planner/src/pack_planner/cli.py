@@ -21,16 +21,10 @@ logger = logging.getLogger(__name__)
     help="Directory containing density report JSON files from ebird-density-analyzer",
 )
 @click.option(
-    "--max-region-size-mb",
-    type=float,
-    default=1950.0,
-    help="Maximum size per region bundle in MB (default: 1950 = 2GB - 50MB buffer)",
-)
-@click.option(
-    "--max-pack-size-mb",
-    type=float,
-    default=500.0,
-    help="Maximum size per individual pack in MB (default: 500MB for fast queries)",
+    "--min-checklists-per-region",
+    type=int,
+    default=6000000,
+    help="Minimum checklists per region (default: 6,000,000)",
 )
 @click.option(
     "--output-manifest",
@@ -45,37 +39,24 @@ logger = logging.getLogger(__name__)
     help="Output path for region registry JSON",
 )
 @click.option(
-    "--method",
-    type=click.Choice(["greedy", "monte-carlo"]),
-    default="greedy",
-    help="Partitioning method (default: greedy)",
-)
-@click.option(
-    "--monte-carlo-iterations",
-    type=int,
-    default=100,
-    help="Number of Monte Carlo iterations if using monte-carlo method",
-)
-@click.option(
     "--verbose",
     is_flag=True,
     help="Enable verbose logging",
 )
 def main(
     density_reports: Path,
-    max_region_size_mb: float,
-    max_pack_size_mb: float,
+    min_checklists_per_region: int,
     output_manifest: Path,
     output_registry: Path,
-    method: str,
-    monte_carlo_iterations: int,
     verbose: bool,
 ):
     """
-    Plan optimal region partitions for eBird pack distribution via GitHub releases.
+    Create regional boundaries for eBird pack distribution.
 
     Reads density reports from ebird-density-analyzer and partitions packs into
-    regions that fit within GitHub's 2GB release limit while maximizing region size.
+    geographic regions based on observation density (checklist counts).
+
+    Aggressively merges regions to meet minimum threshold (~60 regions globally).
     """
     # Setup logging
     logging.basicConfig(
@@ -83,7 +64,7 @@ def main(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
-    logger.info("Pack Planner v0.1.0")
+    logger.info("Pack Planner (Simplified) v0.2.0")
     logger.info("=" * 60)
 
     # Load density reports
@@ -92,37 +73,34 @@ def main(
 
     logger.info("Found %d cells across all resolutions", len(density_data))
 
-    # Create pack manifest from density data using hierarchical selection
-    logger.info("Creating pack manifest with hierarchical selection...")
-    pack_manifest = create_pack_manifest(density_data, max_pack_size_mb=max_pack_size_mb)
+    # Create pack list from density data
+    logger.info("Creating pack definitions from density data...")
+    packs = create_packs_from_density(density_data)
 
     logger.info(
-        "Pack manifest: %d packs, %.2f GB total",
-        len(pack_manifest["packs"]),
-        sum(p["estimated_size_mb"] for p in pack_manifest["packs"]) / 1024,
+        "Created %d packs with %d total checklists",
+        len(packs),
+        sum(p["total_checklists"] for p in packs),
     )
 
-    # Partition into regions
-    logger.info("Partitioning packs into regions (max region size: %.1f MB)...", max_region_size_mb)
+    # Partition into regions based on observation density
+    logger.info(
+        "Partitioning packs into regions (min checklists per region: %d)...",
+        min_checklists_per_region,
+    )
 
-    partitioner = RegionPartitioner(max_size_mb=max_region_size_mb)
-
-    if method == "greedy":
-        regions = partitioner.partition_greedy(pack_manifest["packs"])
-    else:
-        regions = partitioner.partition_monte_carlo(
-            pack_manifest["packs"], iterations=monte_carlo_iterations
-        )
+    partitioner = RegionPartitioner(min_checklists_per_region=min_checklists_per_region)
+    regions = partitioner.partition(packs)
 
     logger.info("Created %d regions", len(regions))
 
     # Generate region names
     logger.info("Generating region names...")
-    namer = RegionNamer()
 
+    namer = RegionNamer()
     for region in regions:
         region["region_id"] = namer.name_region(region)
-        region["release_name"] = f"{region['region_id']}-2025.08"  # CalVer placeholder
+        region["release_name"] = f"{region['region_id']}-2025.08"
 
     # Build registry
     logger.info("Building pack registry...")
@@ -143,8 +121,7 @@ def main(
     logger.info("=" * 60)
     logger.info("Done!")
     logger.info("Total regions: %d", len(regions))
-    logger.info("Average region size: %.1f MB", registry["average_region_size_mb"])
-    logger.info("Total coverage: %.2f GB", registry["total_size_gb"])
+    logger.info("Total checklists: %d", registry.get("total_checklists", 0))
 
 
 def load_density_reports(reports_dir: Path) -> list[dict]:
@@ -167,24 +144,26 @@ def load_density_reports(reports_dir: Path) -> list[dict]:
     return density_data
 
 
-def create_pack_manifest(density_data: list[dict], max_pack_size_mb: float = 500.0) -> dict:
+def create_packs_from_density(density_data: list[dict]) -> list[dict]:
     """
-    Create pack manifest from density data using hierarchical resolution selection.
+    Create pack definitions from density data.
+
+    Uses each cell's recommended data resolution without size-based subdivision.
 
     Args:
         density_data: List of cell density data across all resolutions
-        max_pack_size_mb: Maximum size for individual packs (default: 500MB for fast queries)
 
     Returns:
-        Pack manifest with hierarchically selected optimal cells
+        List of pack definitions
     """
-    import h3
+    packs = []
 
-    # Group cells by resolution for fast lookup
+    # Group cells by resolution
     cells_by_resolution = {}
     for cell in density_data:
-        if cell["complete_checklists"] < 100:
-            continue  # Skip cells with insufficient data
+        # Skip cells with insufficient data
+        if cell.get("complete_checklists", 0) < 100:
+            continue
 
         res = cell.get("resolution", 4)
         if res not in cells_by_resolution:
@@ -196,97 +175,25 @@ def create_pack_manifest(density_data: list[dict], max_pack_size_mb: float = 500
         "Cells by resolution: %s", {r: len(cells) for r, cells in cells_by_resolution.items()}
     )
 
-    # Start hierarchical selection from coarsest resolution
-    min_res = min(cells_by_resolution.keys())
-    max_res = max(cells_by_resolution.keys())
-
-    logger.info(
-        "Hierarchical selection: res %d to %d, max pack size: %.1f MB",
-        min_res,
-        max_res,
-        max_pack_size_mb,
-    )
-
-    selected_packs = []
-    to_process = list(cells_by_resolution[min_res].values())
-
-    while to_process:
-        cell_data = to_process.pop(0)
-        current_res = cell_data.get("resolution", 4)
-
-        # Check if this cell's pack size is acceptable
-        if cell_data["estimated_pack_size_mb"] <= max_pack_size_mb or current_res >= max_res:
-            # Use this cell as a pack (either fits or we're at max resolution)
+    # Use resolution 2 as boundary cells (coarse geographic regions)
+    if 2 in cells_by_resolution:
+        for cell_data in cells_by_resolution[2].values():
             pack = {
-                "pack_id": f"h3-r{current_res}-{cell_data['h3_cell']}-data-r{cell_data['recommended_data_resolution']}",  # noqa: E501
+                "pack_id": f"h3-r2-{cell_data['h3_cell']}-data-r{cell_data['recommended_data_resolution']}",
                 "boundary_cell": cell_data["h3_cell"],
-                "boundary_resolution": current_res,
+                "boundary_resolution": 2,
                 "data_resolution": cell_data["recommended_data_resolution"],
                 "center_lat": cell_data["center_lat"],
                 "center_lon": cell_data["center_lon"],
-                "estimated_size_mb": cell_data["estimated_pack_size_mb"],
-                "total_checklists": cell_data["complete_checklists"],
+                "total_checklists": cell_data.get(
+                    "total_complete_checklists_sampled", cell_data.get("complete_checklists", 0)
+                ),
             }
-            selected_packs.append(pack)
-        else:
-            # Pack is too large - subdivide to children at next resolution
-            next_res = current_res + 1
+            packs.append(pack)
 
-            if next_res in cells_by_resolution:
-                # Get child cells at next resolution
-                children = h3.cell_to_children(cell_data["h3_cell"], next_res)
+    logger.info("Created %d packs from resolution 2 cells", len(packs))
 
-                children_found = 0
-                for child_hex in children:
-                    if child_hex in cells_by_resolution[next_res]:
-                        to_process.append(cells_by_resolution[next_res][child_hex])
-                        children_found += 1
-
-                if children_found == 0:
-                    # No children available - use current cell anyway
-                    logger.warning(
-                        "Cell %s at res %d is too large (%.1f MB) but no children at res %d - using anyway",
-                        cell_data["h3_cell"],
-                        current_res,
-                        cell_data["estimated_pack_size_mb"],
-                        next_res,
-                    )
-                    pack = {
-                        "pack_id": f"h3-r{current_res}-{cell_data['h3_cell']}-data-r{cell_data['recommended_data_resolution']}",  # noqa: E501
-                        "boundary_cell": cell_data["h3_cell"],
-                        "boundary_resolution": current_res,
-                        "data_resolution": cell_data["recommended_data_resolution"],
-                        "center_lat": cell_data["center_lat"],
-                        "center_lon": cell_data["center_lon"],
-                        "estimated_size_mb": cell_data["estimated_pack_size_mb"],
-                        "total_checklists": cell_data["complete_checklists"],
-                    }
-                    selected_packs.append(pack)
-            else:
-                # No next resolution available - use current cell
-                pack = {
-                    "pack_id": f"h3-r{current_res}-{cell_data['h3_cell']}-data-r{cell_data['recommended_data_resolution']}",  # noqa: E501
-                    "boundary_cell": cell_data["h3_cell"],
-                    "boundary_resolution": current_res,
-                    "data_resolution": cell_data["recommended_data_resolution"],
-                    "center_lat": cell_data["center_lat"],
-                    "center_lon": cell_data["center_lon"],
-                    "estimated_size_mb": cell_data["estimated_pack_size_mb"],
-                    "total_checklists": cell_data["complete_checklists"],
-                }
-                selected_packs.append(pack)
-
-    logger.info("Selected %d packs via hierarchical selection", len(selected_packs))
-
-    # Log resolution distribution
-    res_distribution = {}
-    for pack in selected_packs:
-        res = pack["boundary_resolution"]
-        res_distribution[res] = res_distribution.get(res, 0) + 1
-
-    logger.info("Resolution distribution: %s", res_distribution)
-
-    return {"packs": selected_packs, "total_packs": len(selected_packs)}
+    return packs
 
 
 if __name__ == "__main__":

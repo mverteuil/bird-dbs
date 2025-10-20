@@ -1,7 +1,8 @@
 """Region partitioning algorithms for pack distribution."""
 
+import json
 import logging
-import random
+from pathlib import Path
 
 import h3
 
@@ -9,108 +10,86 @@ logger = logging.getLogger(__name__)
 
 
 class RegionPartitioner:
-    """Partition packs into regions that fit within size constraints."""
+    """Partition packs into regions based on observation density."""
 
-    def __init__(self, max_size_mb: float = 1950.0):
+    def __init__(self, min_checklists_per_region: int = 6000000):
         """
         Initialize partitioner.
 
         Args:
-            max_size_mb: Maximum size per region in MB (default: 1950 = 2GB - 50MB buffer)
+            min_checklists_per_region: Minimum checklists per region (default: 6,000,000)
         """
-        self.max_size_mb = max_size_mb
+        self.min_checklists_per_region = min_checklists_per_region
 
-    def partition_greedy(self, packs: list[dict]) -> list[dict]:
+    def partition(self, packs: list[dict]) -> list[dict]:
         """
-        Partition packs using greedy merge algorithm.
+        Partition packs using observation density-based grouping.
 
-        Start with H3 res 2 grouping, then greedily merge adjacent regions.
+        Strategy:
+        1. Group by H3 res 2 parent cells
+        2. Aggressively merge regions below minimum threshold
+        3. Force small regions to merge with neighbors
 
         Args:
-            packs: List of pack dictionaries with size and location info
+            packs: List of pack dictionaries with checklist counts
 
         Returns:
             List of region dictionaries
         """
-        logger.info("Starting greedy partition...")
+        logger.info("Starting density-based partition...")
 
         # Step 1: Group by H3 res 2 parent cells
         regions = self._group_by_parent(packs, resolution=2)
 
         logger.info("Initial grouping: %d regions", len(regions))
 
-        # Step 2: Greedy merge
+        # Step 2: Force merging of regions below minimum threshold
         changed = True
         merge_count = 0
 
         while changed:
             changed = False
-            # Sort by size (merge smallest first)
-            regions.sort(key=lambda r: r["size_mb"])
 
-            for i, region_a in enumerate(regions):
-                # Find adjacent regions that fit when merged
-                for j in range(i + 1, len(regions)):
-                    region_b = regions[j]
+            # Find regions below minimum threshold
+            small_regions = [
+                r for r in regions if r["total_checklists"] < self.min_checklists_per_region
+            ]
 
-                    if self._are_adjacent(region_a, region_b) and (
-                        region_a["size_mb"] + region_b["size_mb"] <= self.max_size_mb
-                    ):
-                        # Merge them
-                        merged = self._merge_regions(region_a, region_b)
+            if not small_regions:
+                break  # All regions meet minimum
 
-                        # Remove old regions, add merged
-                        regions = [r for r in regions if r not in [region_a, region_b]]
-                        regions.append(merged)
+            # Sort small regions by size (smallest first for aggressive merging)
+            small_regions.sort(key=lambda r: r["total_checklists"])
 
-                        changed = True
-                        merge_count += 1
-                        break
+            for region_a in small_regions:
+                # Find smallest adjacent neighbor
+                best_neighbor = None
+                best_size = float("inf")
 
-                if changed:
-                    break
+                for region_b in regions:
+                    if region_b is region_a:
+                        continue
+
+                    if self._are_adjacent(region_a, region_b):
+                        if region_b["total_checklists"] < best_size:
+                            best_neighbor = region_b
+                            best_size = region_b["total_checklists"]
+
+                if best_neighbor:
+                    # Merge with smallest neighbor
+                    merged = self._merge_regions(region_a, best_neighbor)
+
+                    # Remove old regions, add merged
+                    regions = [r for r in regions if r not in [region_a, best_neighbor]]
+                    regions.append(merged)
+
+                    changed = True
+                    merge_count += 1
+                    break  # Restart to re-evaluate
 
         logger.info("Completed %d merges, final regions: %d", merge_count, len(regions))
 
         return regions
-
-    def partition_monte_carlo(self, packs: list[dict], iterations: int = 100) -> list[dict]:
-        """
-        Partition packs using Monte Carlo optimization.
-
-        Try multiple random merge orders and pick the one with fewest regions.
-
-        Args:
-            packs: List of pack dictionaries
-            iterations: Number of random iterations
-
-        Returns:
-            Best partition found
-        """
-        logger.info("Starting Monte Carlo partition with %d iterations...", iterations)
-
-        best_partition = None
-        best_score = float("inf")
-
-        for i in range(iterations):
-            # Randomize merge order by shuffling packs
-            shuffled = packs.copy()
-            random.shuffle(shuffled)
-
-            # Run greedy on shuffled input
-            partition = self.partition_greedy(shuffled)
-
-            # Score: fewer regions = better
-            score = len(partition)
-
-            if score < best_score:
-                best_score = score
-                best_partition = partition
-                logger.debug("Iteration %d: New best score %d regions", i, score)
-
-        logger.info("Best partition: %d regions", len(best_partition))
-
-        return best_partition
 
     def _group_by_parent(self, packs: list[dict], resolution: int) -> list[dict]:
         """Group packs by H3 parent cell at given resolution."""
@@ -126,13 +105,13 @@ class RegionPartitioner:
                 regions[parent] = {
                     "h3_cells": [parent],
                     "packs": [],
-                    "size_mb": 0.0,
+                    "total_checklists": 0,
                     "pack_count": 0,
                     "center": {"lat": lat, "lon": lng},
                 }
 
             regions[parent]["packs"].append(pack)
-            regions[parent]["size_mb"] += pack["estimated_size_mb"]
+            regions[parent]["total_checklists"] += pack.get("total_checklists", 0)
             regions[parent]["pack_count"] += 1
 
         return list(regions.values())
@@ -148,23 +127,28 @@ class RegionPartitioner:
 
     def _merge_regions(self, region_a: dict, region_b: dict) -> dict:
         """Merge two regions into one."""
-        # Calculate new center (weighted by pack count)
-        total_packs = region_a["pack_count"] + region_b["pack_count"]
+        # Calculate new center (weighted by checklist count)
+        total_checklists = region_a["total_checklists"] + region_b["total_checklists"]
 
-        new_center_lat = (
-            region_a["center"]["lat"] * region_a["pack_count"]
-            + region_b["center"]["lat"] * region_b["pack_count"]
-        ) / total_packs
+        if total_checklists > 0:
+            new_center_lat = (
+                region_a["center"]["lat"] * region_a["total_checklists"]
+                + region_b["center"]["lat"] * region_b["total_checklists"]
+            ) / total_checklists
 
-        new_center_lon = (
-            region_a["center"]["lon"] * region_a["pack_count"]
-            + region_b["center"]["lon"] * region_b["pack_count"]
-        ) / total_packs
+            new_center_lon = (
+                region_a["center"]["lon"] * region_a["total_checklists"]
+                + region_b["center"]["lon"] * region_b["total_checklists"]
+            ) / total_checklists
+        else:
+            # Fallback to simple average if no checklists
+            new_center_lat = (region_a["center"]["lat"] + region_b["center"]["lat"]) / 2
+            new_center_lon = (region_a["center"]["lon"] + region_b["center"]["lon"]) / 2
 
         return {
             "h3_cells": region_a["h3_cells"] + region_b["h3_cells"],
             "packs": region_a["packs"] + region_b["packs"],
-            "size_mb": region_a["size_mb"] + region_b["size_mb"],
+            "total_checklists": total_checklists,
             "pack_count": region_a["pack_count"] + region_b["pack_count"],
             "center": {"lat": new_center_lat, "lon": new_center_lon},
         }
