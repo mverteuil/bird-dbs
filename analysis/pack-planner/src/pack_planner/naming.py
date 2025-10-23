@@ -8,10 +8,6 @@ logger = logging.getLogger(__name__)
 class RegionNamer:
     """Generate human-readable region names from H3 cells."""
 
-    def __init__(self):
-        """Initialize with tracking for unique names."""
-        self._name_counts = {}
-
     # Special regions (islands, oceanic areas) - checked first
     SPECIAL_REGIONS = {
         "oceania-galapagos": {"lon": (-92, -89), "lat": (-2, 1)},  # Galápagos Islands
@@ -24,17 +20,6 @@ class RegionNamer:
         "africa-west-coast": {"lon": (-20, 5), "lat": (0, 18)},  # West Africa coast
         "europe-arctic": {"lon": (15, 70), "lat": (68, 75)},  # Arctic Europe/Russia
         "atlantic-south": {"lon": (-40, 20), "lat": (-60, -30)},  # South Atlantic
-        "pacific-western": {"lon": (120, 180), "lat": (-30, 30)},  # Western Pacific
-        "pacific-eastern": {"lon": (-180, -120), "lat": (-30, 30)},  # Eastern Pacific
-        "indian-ocean": {"lon": (40, 120), "lat": (-60, 30)},  # Indian Ocean
-        "southern-ocean": {"lon": (-180, 180), "lat": (-90, -60)},  # Southern Ocean/Antarctica
-        "arctic-ocean": {"lon": (-180, 180), "lat": (70, 90)},  # Arctic Ocean
-        # Additional oceanic regions for better coverage
-        "pacific-marshall": {"lon": (160, 175), "lat": (5, 25)},  # Marshall Islands area
-        "pacific-line": {"lon": (-165, -150), "lat": (-5, 10)},  # Line Islands
-        "pacific-kiribati": {"lon": (-180, -170), "lat": (-5, 5)},  # Kiribati
-        "indian-chagos": {"lon": (65, 80), "lat": (-15, -5)},  # Chagos Archipelago
-        "bering-sea": {"lon": (160, 180), "lat": (52, 70)},  # Bering Sea
     }
 
     # Predefined geographic mappings
@@ -90,13 +75,13 @@ class RegionNamer:
 
     def name_region(self, region: dict) -> str:
         """
-        Generate region name from geographic center with H3 cell ID for uniqueness.
+        Generate region name from geographic center.
 
         Args:
-            region: Region dict with center lat/lon and h3_cells list
+            region: Region dict with center lat/lon
 
         Returns:
-            Unique region slug (e.g., "na-west-coast-8244b", "europe-central-824cd")
+            Region slug (e.g., "na-west-coast", "europe-central")
         """
         lat = region["center"]["lat"]
         lon = region["center"]["lon"]
@@ -104,38 +89,24 @@ class RegionNamer:
         # Check special regions first (islands, oceanic areas)
         special = self._get_special_region(lat, lon)
         if special:
-            base_name = special
+            logger.debug("Named region at (%.2f, %.2f) as: %s", lat, lon, special)
+            return special
+
+        # Determine continent
+        continent = self._get_continent(lat, lon)
+
+        # Determine subregion
+        subregion = self._get_subregion(continent, lat, lon)
+
+        # Create slug
+        if subregion:
+            slug = f"{continent}-{subregion}"
         else:
-            # Determine continent
-            continent = self._get_continent(lat, lon)
+            slug = continent
 
-            # Determine subregion
-            subregion = self._get_subregion(continent, lat, lon)
+        logger.debug("Named region at (%.2f, %.2f) as: %s", lat, lon, slug)
 
-            # Create base slug
-            if subregion:
-                base_name = f"{continent}-{subregion}"
-            else:
-                base_name = continent
-
-        # Get primary H3 cell for this region (first cell in the list)
-        # Use first 5 characters of the H3 cell ID for brevity
-        h3_cells = region.get("h3_cells", [])
-        if h3_cells:
-            h3_suffix = h3_cells[0][:5]  # First 5 chars of H3 cell ID
-            unique_name = f"{base_name}-{h3_suffix}"
-        else:
-            # Fallback to numeric suffix if no H3 cells (shouldn't happen)
-            if base_name in self._name_counts:
-                self._name_counts[base_name] += 1
-                unique_name = f"{base_name}-{self._name_counts[base_name]}"
-            else:
-                self._name_counts[base_name] = 1
-                unique_name = base_name
-
-        logger.debug("Named region at (%.2f, %.2f) as: %s", lat, lon, unique_name)
-
-        return unique_name
+        return slug
 
     def _get_special_region(self, lat: float, lon: float) -> str | None:
         """Check if coordinates fall in a special region (islands, oceanic areas)."""
@@ -157,38 +128,8 @@ class RegionNamer:
             if lon_min <= lon <= lon_max and lat_min <= lat <= lat_max:
                 return continent
 
-        # Fallback to ocean-based naming for non-continental areas
-        return self._get_ocean_region(lat, lon)
-
-    def _get_ocean_region(self, lat: float, lon: float) -> str:
-        """Determine ocean-based region for non-continental coordinates."""
-        # Check latitude bands first
-        if lat >= 60:
-            return "arctic"
-        elif lat <= -60:
-            return "antarctic"
-
-        # Determine ocean by longitude for tropical/temperate regions
-        if -180 <= lon < -20:
-            if lat > 0:
-                return "pacific-north"
-            else:
-                return "pacific-south"
-        elif -20 <= lon < 40:
-            if lat > 0:
-                return "atlantic-north"
-            else:
-                return "atlantic-south"
-        elif 40 <= lon < 120:
-            if lat > 0:
-                return "indian-north"
-            else:
-                return "indian-south"
-        else:  # 120 <= lon <= 180
-            if lat > 0:
-                return "pacific-west-north"
-            else:
-                return "pacific-west-south"
+        # Default fallback
+        return "unknown"
 
     def _get_subregion(self, continent: str, lat: float, lon: float) -> str | None:
         """Determine subregion within continent."""

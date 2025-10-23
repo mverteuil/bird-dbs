@@ -26,8 +26,29 @@ pub struct H3CellData {
 
 pub struct SpeciesAccumulator {
     pub scientific_name: String,
-    pub observations: Vec<ObservationEvent>,
     pub checklists: HashSet<String>,
+    pub complete_checklists: HashSet<String>,
+
+    // Observation dates (for min/max tracking)
+    pub first_observation: Option<NaiveDate>,
+    pub last_observation: Option<NaiveDate>,
+
+    // High-quality observation dates (approved + complete + native + species-level)
+    pub first_high_quality_observation: Option<NaiveDate>,
+    pub last_high_quality_observation: Option<NaiveDate>,
+
+    // Quality tracking (incremental)
+    pub high_quality_obs: u32,
+    pub low_quality_obs: u32,
+
+    // Temporal tracking (incremental)
+    pub monthly_obs: [u32; 12],
+    pub monthly_checklists: [HashSet<String>; 12],
+    pub yearly_data: HashMap<u16, (u32, HashSet<String>)>, // year -> (obs_count, checklists)
+    pub quarterly_obs: [u32; 4],
+    pub quarterly_checklists: [HashSet<String>; 4],
+    pub weekly_obs: [u32; 48],  // BirdNET uses 48 weeks (365 days / 7.6 days per week)
+    pub weekly_checklists: [HashSet<String>; 48],
 }
 
 pub struct ObservationEvent {
@@ -54,6 +75,7 @@ pub struct SpeciesData {
     pub monthly_data: Vec<MonthlyData>,
     pub yearly_data: Vec<YearlyData>,
     pub quarterly_data: Vec<QuarterlyData>,
+    pub weekly_data: Vec<WeeklyData>,
     pub quality_score: f64,
     pub high_quality_obs: u32,
     pub low_quality_obs: u32,
@@ -78,6 +100,14 @@ pub struct YearlyData {
 #[derive(Debug, Clone)]
 pub struct QuarterlyData {
     pub quarter: u8,  // 1-4
+    pub observations: u32,
+    pub checklists: u32,
+    pub frequency: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WeeklyData {
+    pub week: u8,  // 1-48 (aligned with BirdNET's 48-week year model)
     pub observations: u32,
     pub checklists: u32,
     pub frequency: f64,
@@ -173,26 +203,100 @@ impl H3CellData {
         self.date_range_start = Some(self.date_range_start.map(|d| d.min(date)).unwrap_or(date));
         self.date_range_end = Some(self.date_range_end.map(|d| d.max(date)).unwrap_or(date));
 
-        // Add to species accumulator
+        // Normalize species name BEFORE aggregation to treat variants as same species
+        // e.g., "Anas platyrhynchos/wyvilliana" → "Anas platyrhynchos"
+        let normalized_name = normalize_species_name(&record.scientific_name);
+
+        // Add to species accumulator using normalized name as key
         let species = self
             .species
-            .entry(record.scientific_name.clone())
+            .entry(normalized_name.clone())
             .or_insert_with(|| SpeciesAccumulator {
-                scientific_name: record.scientific_name.clone(),
-                observations: Vec::new(),
+                scientific_name: normalized_name.clone(),
                 checklists: HashSet::new(),
+                complete_checklists: HashSet::new(),
+                first_observation: None,
+                last_observation: None,
+                first_high_quality_observation: None,
+                last_high_quality_observation: None,
+                high_quality_obs: 0,
+                low_quality_obs: 0,
+                monthly_obs: [0; 12],
+                monthly_checklists: Default::default(),
+                yearly_data: HashMap::new(),
+                quarterly_obs: [0; 4],
+                quarterly_checklists: Default::default(),
+                weekly_obs: [0; 48],
+                weekly_checklists: std::array::from_fn(|_| HashSet::new()),
             });
 
-        species.observations.push(ObservationEvent {
-            date,
-            checklist_id: checklist_id.clone(),
-            count: record.get_count(),
-            is_approved: record.is_approved(),
-            is_complete_checklist: record.is_complete_checklist(),
-            is_native: record.is_native(),
-            is_species: record.is_species(),
-        });
-        species.checklists.insert(checklist_id);
+        // Update overall dates (all observations)
+        species.first_observation = Some(
+            species
+                .first_observation
+                .map(|d| d.min(date))
+                .unwrap_or(date),
+        );
+        species.last_observation = Some(
+            species
+                .last_observation
+                .map(|d| d.max(date))
+                .unwrap_or(date),
+        );
+
+        // Track checklists
+        species.checklists.insert(checklist_id.clone());
+        if record.is_complete_checklist() {
+            species.complete_checklists.insert(checklist_id.clone());
+        }
+
+        // Update quality tracking
+        let is_high_quality = record.is_approved()
+            && record.is_complete_checklist()
+            && record.is_native()
+            && record.is_species();
+
+        if is_high_quality {
+            species.high_quality_obs += 1;
+
+            // Update high-quality observation dates separately
+            species.first_high_quality_observation = Some(
+                species
+                    .first_high_quality_observation
+                    .map(|d| d.min(date))
+                    .unwrap_or(date),
+            );
+            species.last_high_quality_observation = Some(
+                species
+                    .last_high_quality_observation
+                    .map(|d| d.max(date))
+                    .unwrap_or(date),
+            );
+        } else {
+            species.low_quality_obs += 1;
+        }
+
+        // Update monthly data
+        let month = (date.month0() as usize).min(11);
+        species.monthly_obs[month] += 1;
+        species.monthly_checklists[month].insert(checklist_id.clone());
+
+        // Update yearly data
+        let year = date.year() as u16;
+        let yearly_entry = species.yearly_data.entry(year).or_insert((0, HashSet::new()));
+        yearly_entry.0 += 1; // increment observation count
+        yearly_entry.1.insert(checklist_id.clone());
+
+        // Update quarterly data
+        let quarter = ((date.month0() / 3) as usize).min(3);
+        species.quarterly_obs[quarter] += 1;
+        species.quarterly_checklists[quarter].insert(checklist_id.clone());
+
+        // Update weekly data (BirdNET uses 48 weeks, ~7.6 days per week)
+        let day_of_year = date.ordinal() as usize; // 1-366
+        let week = ((day_of_year - 1) * 48 / 365).min(47); // Convert to 0-47, then clamp
+        species.weekly_obs[week] += 1;
+        species.weekly_checklists[week].insert(checklist_id);
 
         Ok(())
     }
@@ -208,7 +312,7 @@ impl H3CellData {
         let total_sampled = sampling_data.get(&self.h3_cell).copied();
 
         // Use sampling data for frequency calculations if available and reliable
-        let frequency_denominator = if let Some(sampled) = total_sampled {
+        let _frequency_denominator = if let Some(sampled) = total_sampled {
             if sampled >= 100 {
                 sampled as f64
             } else {
@@ -222,11 +326,14 @@ impl H3CellData {
             .species
             .into_iter()
             .filter_map(|(_, acc)| {
-                let total_obs = acc.observations.len() as u32;
+                // Total observations = sum of high + low quality
+                let total_obs = acc.high_quality_obs + acc.low_quality_obs;
                 let total_lists = acc.checklists.len() as u32;
+                let complete_lists = acc.complete_checklists.len() as u32;
 
-                let yearly_frequency = if frequency_denominator > 0.0 {
-                    total_lists as f64 / frequency_denominator
+                // Use total_complete as denominator since complete_lists comes from observation data
+                let yearly_frequency = if total_complete > 0.0 {
+                    complete_lists as f64 / total_complete
                 } else {
                     0.0
                 };
@@ -235,6 +342,14 @@ impl H3CellData {
                 let meets_thresholds = total_obs >= config.min_observations
                     && total_lists >= config.min_checklists
                     && yearly_frequency >= config.min_yearly_frequency;
+
+                // Calculate quality score from pre-computed counters
+                let total = (acc.high_quality_obs + acc.low_quality_obs) as f64;
+                let quality_score = if total > 0.0 {
+                    acc.high_quality_obs as f64 / total
+                } else {
+                    0.0
+                };
 
                 // If species doesn't meet thresholds, still include with 'excluded' tier
                 let (confidence_tier, confidence_boost) = if !meets_thresholds {
@@ -248,31 +363,38 @@ impl H3CellData {
                         yearly_frequency,
                     );
 
-                    // Calculate quality score
-                    let (quality_score, _, _) = calculate_quality_score(&acc.observations);
-
                     // Apply quality multiplier to confidence boost
                     let quality_multiplier = 0.7 + (0.3 * quality_score); // 0.7-1.0 range
                     let final_boost = base_boost * absence_penalty * quality_multiplier;
 
                     // Clamp to database constraint range (0.8-2.0)
-                    // Min possible: 1.0 * 0.8 * 0.7 = 0.56 (needs clamping)
-                    // Max possible: 1.3 * 1.0 * 1.0 = 1.3 (within range)
                     let clamped_boost = final_boost.clamp(0.8, 2.0);
 
                     (tier, clamped_boost)
                 };
 
-                // Compute temporal data (monthly, yearly, quarterly)
-                let monthly_data = compute_monthly_data(&acc.observations, total_complete);
-                let yearly_data = compute_yearly_data(&acc.observations, total_complete);
-                let quarterly_data = compute_quarterly_data(&acc.observations, total_complete);
+                // Compute temporal data from pre-computed aggregates
+                let monthly_data = compute_monthly_data_from_aggregates(
+                    &acc.monthly_obs,
+                    &acc.monthly_checklists,
+                    total_complete,
+                );
+                let yearly_data = compute_yearly_data_from_aggregates(
+                    &acc.yearly_data,
+                    total_complete,
+                );
+                let quarterly_data = compute_quarterly_data_from_aggregates(
+                    &acc.quarterly_obs,
+                    &acc.quarterly_checklists,
+                    total_complete,
+                );
+                let weekly_data = compute_weekly_data_from_aggregates(
+                    &acc.weekly_obs,
+                    &acc.weekly_checklists,
+                    total_complete,
+                );
 
-                // Calculate data quality score and counts
-                let (quality_score, high_quality_obs, low_quality_obs) =
-                    calculate_quality_score(&acc.observations);
-
-                // Look up avibase_id from scientific_name
+                // Look up avibase_id (species name already normalized during aggregation)
                 let avibase_id = avibase_mapping
                     .get(&acc.scientific_name)
                     .cloned()
@@ -290,16 +412,17 @@ impl H3CellData {
                     yearly_frequency,
                     total_observations: total_obs,
                     total_checklists: total_lists,
-                    first_observation: acc.observations.iter().map(|o| o.date).min().unwrap(),
-                    last_observation: acc.observations.iter().map(|o| o.date).max().unwrap(),
-                    confidence_tier,  // From conditional logic above
-                    confidence_boost,  // From conditional logic above
+                    first_observation: acc.first_observation.unwrap(),
+                    last_observation: acc.last_observation.unwrap(),
+                    confidence_tier,
+                    confidence_boost,
                     monthly_data,
                     yearly_data,
                     quarterly_data,
+                    weekly_data,
                     quality_score,
-                    high_quality_obs,
-                    low_quality_obs,
+                    high_quality_obs: acc.high_quality_obs,
+                    low_quality_obs: acc.low_quality_obs,
                 })
             })
             .collect();
@@ -335,25 +458,24 @@ impl H3CellData {
     }
 }
 
-pub(crate) fn compute_monthly_data(
-    observations: &[ObservationEvent],
-    total_complete_checklists: f64,
+pub(crate) fn compute_monthly_data_from_aggregates(
+    monthly_obs: &[u32; 12],
+    monthly_checklists: &[HashSet<String>; 12],
+    _total_complete_checklists: f64, // Kept for API compatibility but not used for frequency calculation
 ) -> Vec<MonthlyData> {
-    let mut monthly_obs = [0u32; 12];
-    let mut monthly_checklists: [HashSet<String>; 12] = Default::default();
-
-    for obs in observations {
-        let month = (obs.date.month0() as usize).min(11);
-        monthly_obs[month] += 1;
-        monthly_checklists[month].insert(obs.checklist_id.clone());
-    }
+    // Calculate total checklists from observation data to ensure frequency <= 1.0
+    let total_obs_checklists = monthly_checklists
+        .iter()
+        .map(|set| set.len() as f64)
+        .sum::<f64>();
 
     (1..=12)
         .map(|month| {
             let idx = (month - 1) as usize;
             let checklists = monthly_checklists[idx].len() as u32;
-            let frequency = if total_complete_checklists > 0.0 {
-                checklists as f64 / total_complete_checklists
+            // Use observation data total as denominator to ensure valid frequency range
+            let frequency = if total_obs_checklists > 0.0 {
+                checklists as f64 / total_obs_checklists
             } else {
                 0.0
             };
@@ -369,32 +491,30 @@ pub(crate) fn compute_monthly_data(
         .collect()
 }
 
-pub(crate) fn compute_yearly_data(
-    observations: &[ObservationEvent],
-    total_complete_checklists: f64,
+pub(crate) fn compute_yearly_data_from_aggregates(
+    yearly_data: &HashMap<u16, (u32, HashSet<String>)>,
+    _total_complete_checklists: f64, // Kept for API compatibility but not used for frequency calculation
 ) -> Vec<YearlyData> {
-    let mut yearly_data: HashMap<u16, (u32, HashSet<String>)> = HashMap::new();
-
-    for obs in observations {
-        let year = obs.date.year() as u16;
-        let entry = yearly_data.entry(year).or_insert((0, HashSet::new()));
-        entry.0 += 1; // observations
-        entry.1.insert(obs.checklist_id.clone()); // checklists
-    }
+    // Calculate total checklists from observation data to ensure frequency <= 1.0
+    let total_obs_checklists = yearly_data
+        .values()
+        .map(|(_, checklists)| checklists.len() as f64)
+        .sum::<f64>();
 
     let mut results: Vec<YearlyData> = yearly_data
-        .into_iter()
+        .iter()
         .map(|(year, (observations, checklists))| {
             let checklists_count = checklists.len() as u32;
-            let frequency = if total_complete_checklists > 0.0 {
-                checklists_count as f64 / total_complete_checklists
+            // Use observation data total as denominator to ensure valid frequency range
+            let frequency = if total_obs_checklists > 0.0 {
+                checklists_count as f64 / total_obs_checklists
             } else {
                 0.0
             };
 
             YearlyData {
-                year,
-                observations,
+                year: *year,
+                observations: *observations,
                 checklists: checklists_count,
                 frequency,
             }
@@ -405,39 +525,117 @@ pub(crate) fn compute_yearly_data(
     results
 }
 
-pub(crate) fn compute_quarterly_data(
-    observations: &[ObservationEvent],
-    total_complete_checklists: f64,
+pub(crate) fn compute_quarterly_data_from_aggregates(
+    quarterly_obs: &[u32; 4],
+    quarterly_checklists: &[HashSet<String>; 4],
+    _total_complete_checklists: f64, // Kept for API compatibility but not used for frequency calculation
 ) -> Vec<QuarterlyData> {
-    let mut quarterly_data: [u32; 4] = [0; 4];
-    let mut quarterly_checklists: [HashSet<String>; 4] = Default::default();
-
-    for obs in observations {
-        // Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec
-        let quarter = ((obs.date.month0() / 3) as usize).min(3);
-        quarterly_data[quarter] += 1;
-        quarterly_checklists[quarter].insert(obs.checklist_id.clone());
-    }
+    // Calculate total checklists from observation data to ensure frequency <= 1.0
+    let total_obs_checklists = quarterly_checklists
+        .iter()
+        .map(|set| set.len() as f64)
+        .sum::<f64>();
 
     (1..=4)
         .map(|quarter| {
             let idx = (quarter - 1) as usize;
             let checklists = quarterly_checklists[idx].len() as u32;
-            let frequency = if total_complete_checklists > 0.0 {
-                checklists as f64 / total_complete_checklists
+            // Use observation data total as denominator to ensure valid frequency range
+            let frequency = if total_obs_checklists > 0.0 {
+                checklists as f64 / total_obs_checklists
             } else {
                 0.0
             };
 
             QuarterlyData {
                 quarter,
-                observations: quarterly_data[idx],
+                observations: quarterly_obs[idx],
                 checklists,
                 frequency,
             }
         })
         .filter(|q| q.observations > 0 || q.checklists > 0)
         .collect()
+}
+
+pub(crate) fn compute_weekly_data_from_aggregates(
+    weekly_obs: &[u32; 48],
+    weekly_checklists: &[HashSet<String>; 48],
+    _total_complete_checklists: f64, // Kept for API compatibility but not used for frequency calculation
+) -> Vec<WeeklyData> {
+    // Calculate total checklists from observation data to ensure frequency <= 1.0
+    let total_obs_checklists = weekly_checklists
+        .iter()
+        .map(|set| set.len() as f64)
+        .sum::<f64>();
+
+    (1..=48)
+        .map(|week| {
+            let idx = (week - 1) as usize;
+            let checklists = weekly_checklists[idx].len() as u32;
+            // Use observation data total as denominator to ensure valid frequency range
+            let frequency = if total_obs_checklists > 0.0 {
+                checklists as f64 / total_obs_checklists
+            } else {
+                0.0
+            };
+
+            WeeklyData {
+                week,
+                observations: weekly_obs[idx],
+                checklists,
+                frequency,
+            }
+        })
+        .filter(|w| w.observations > 0 || w.checklists > 0)
+        .collect()
+}
+
+/// Normalize species name for avibase ID lookup
+/// Handles slashes (subspecies/variants), hybrids, and parenthetical descriptions
+pub fn normalize_species_name(name: &str) -> String {
+    // Remove parenthetical descriptions first (e.g., "Aves sp. (goose sp.)" → "Aves sp.")
+    let name = if let Some(paren_start) = name.find('(') {
+        name[..paren_start].trim()
+    } else {
+        name
+    };
+
+    // Handle slash notation - take first species (e.g., "Anas platyrhynchos/wyvilliana" → "Anas platyrhynchos")
+    if let Some(slash_pos) = name.find('/') {
+        let before_slash = name[..slash_pos].trim();
+
+        // Check if the original name ends with " sp." or " spp." (spuh indicator)
+        // If so, preserve it after extracting the first genus/species
+        let has_spuh = name.ends_with(" sp.") || name.ends_with(" spp.");
+
+        if has_spuh {
+            // Preserve the spuh indicator: "Alca/Pinguinus sp." → "Alca sp."
+            format!("{} sp.", before_slash)
+        } else {
+            // Regular slash notation: "Anas platyrhynchos/wyvilliana" → "Anas platyrhynchos"
+            before_slash.to_string()
+        }
+    }
+    // Handle hybrid notation - take first species (e.g., "Cairina moschata x Anas platyrhynchos" → "Cairina moschata")
+    else if let Some(x_pos) = name.find(" x ") {
+        let before_x = name[..x_pos].trim();
+
+        // Check if the original name ends with " sp." or " spp." (spuh indicator)
+        let has_spuh = name.ends_with(" sp.") || name.ends_with(" spp.");
+
+        if has_spuh {
+            // Preserve the spuh indicator: "Genus1 x Genus2 sp." → "Genus1 sp."
+            format!("{} sp.", before_x)
+        } else {
+            // Regular hybrid notation
+            before_x.to_string()
+        }
+    }
+    // Return as-is if no special patterns
+    else {
+        name.to_string()
+    }
 }
 
 pub(crate) fn classify_species(yearly_frequency: f64) -> (String, f64) {
@@ -482,39 +680,3 @@ pub(crate) fn calculate_absence_penalty(
     1.0
 }
 
-/// Calculate data quality score based on observation characteristics
-///
-/// Returns (quality_score, high_quality_count, low_quality_count)
-///
-/// Quality criteria (all must be true for high quality):
-/// - Approved observation
-/// - Complete checklist
-/// - Native species
-/// - Species-level identification
-///
-/// Quality score ranges from 0.0 (all low quality) to 1.0 (all high quality)
-pub(crate) fn calculate_quality_score(observations: &[ObservationEvent]) -> (f64, u32, u32) {
-    let mut high_quality = 0u32;
-    let mut low_quality = 0u32;
-
-    for obs in observations {
-        if obs.is_approved
-            && obs.is_complete_checklist
-            && obs.is_native
-            && obs.is_species
-        {
-            high_quality += 1;
-        } else {
-            low_quality += 1;
-        }
-    }
-
-    let total = (high_quality + low_quality) as f64;
-    let quality_score = if total > 0.0 {
-        high_quality as f64 / total
-    } else {
-        0.0
-    };
-
-    (quality_score, high_quality, low_quality)
-}
