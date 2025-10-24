@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use config::PackManifest;
+use config::{PackManifest, PackRegistry};
 use ebird::EBirdRecord;
 use h3::H3Aggregator;
 use h3o::CellIndex;
@@ -36,6 +36,10 @@ struct Cli {
     /// Pack manifest JSON (from pack-planner)
     #[arg(short, long)]
     manifest: PathBuf,
+
+    /// Pack registry JSON (from pack-planner, will be updated with actual sizes)
+    #[arg(short = 'r', long)]
+    registry: PathBuf,
 
     /// Density reports directory (from ebird-density-analyzer, optional)
     #[arg(short = 'd', long)]
@@ -473,23 +477,26 @@ fn main() -> Result<()> {
     }
 
     // ========================================================================
-    // PHASE 4: Update manifest with actual file sizes
+    // PHASE 4: Update registry with actual file sizes
     // ========================================================================
-    info!("\n=== Phase 4: Updating manifest with actual file sizes ===");
+    info!("\n=== Phase 4: Updating registry with actual file sizes ===");
 
-    let mut updated_manifest = manifest.clone();
+    // Load the registry
+    let registry_file = File::open(&cli.registry)?;
+    let mut registry: PackRegistry = serde_json::from_reader(registry_file)?;
+
     let mut updated_count = 0;
 
-    for region in &mut updated_manifest.regions {
+    for region in &mut registry.regions {
         if let Some(&actual_size_mb) = region_sizes.get(&region.region_id) {
-            let old_estimate = region.size_mb;
-            region.size_mb = actual_size_mb;
+            let old_size = region.total_size_mb;
+            region.total_size_mb = actual_size_mb;
             updated_count += 1;
             info!(
-                "  Updated {}: {:.2} MB (was {:.2} MB estimated)",
+                "  Updated {}: {:.2} MB (was {:.2} MB)",
                 region.region_id,
                 actual_size_mb,
-                old_estimate
+                old_size
             );
         }
     }
@@ -497,19 +504,27 @@ fn main() -> Result<()> {
     info!(
         "\n  Updated {} of {} regions with actual sizes",
         updated_count,
-        updated_manifest.regions.len()
+        registry.regions.len()
     );
 
-    // Write updated manifest
-    let updated_manifest_path = cli.manifest.with_file_name("pack_manifest_updated.json");
-    info!("  Writing updated manifest to {:?}", updated_manifest_path);
+    // Create timestamped backup
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let backup_path = cli.registry.with_file_name(format!(
+        "pack_registry.backup_{}.json",
+        timestamp
+    ));
 
-    let manifest_file = File::create(&updated_manifest_path)?;
-    serde_json::to_writer_pretty(manifest_file, &updated_manifest)?;
+    info!("  Creating backup at {:?}", backup_path);
+    std::fs::copy(&cli.registry, &backup_path)?;
 
-    info!("  ✓ Manifest updated successfully");
+    // Write updated registry to original path
+    info!("  Writing updated registry to {:?}", cli.registry);
+    let registry_file = File::create(&cli.registry)?;
+    serde_json::to_writer_pretty(registry_file, &registry)?;
 
-    info!("\n✓ Done! All regions processed and manifest updated.");
+    info!("  ✓ Registry updated successfully");
+
+    info!("\n✓ Done! All regions processed and registry updated.");
 
     Ok(())
 }

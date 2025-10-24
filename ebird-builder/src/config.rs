@@ -131,3 +131,33 @@ pub struct CellDensityData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_complete_checklists_sampled: Option<usize>,
 }
+
+// Pack registry structures (for BirdNET-Pi runtime lookup)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PackRegistry {
+    pub version: String,
+    pub generated_at: String,
+    pub total_regions: usize,
+    pub total_packs: usize,
+    pub regions: Vec<RegistryRegion>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RegistryRegion {
+    pub region_id: String,
+    pub release_name: String,
+    pub h3_cells: Vec<String>,
+    pub pack_count: usize,
+    pub total_size_mb: f64,
+    pub resolution: u8,
+    pub center: Center,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BBox {
+    pub min_lat: f64,
+    pub max_lat: f64,
+    pub min_lon: f64,
+    pub max_lon: f64,
+}
