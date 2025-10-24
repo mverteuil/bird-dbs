@@ -6,6 +6,7 @@ mod tests {
 
     fn sample_record() -> EBirdRecord {
         EBirdRecord {
+            taxon_concept_id: "avibase-4A2E6B9F".to_string(), // American Robin
             scientific_name: "Turdus migratorius".to_string(),
             common_name: "American Robin".to_string(),
             observation_count: "2".to_string(),

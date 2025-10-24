@@ -46,15 +46,21 @@ logger = logging.getLogger(__name__)
 )
 @click.option(
     "--method",
-    type=click.Choice(["greedy", "monte-carlo"]),
-    default="greedy",
-    help="Partitioning method (default: greedy)",
+    type=click.Choice(["greedy", "monte-carlo", "continental"]),
+    default="continental",
+    help="Partitioning method (default: continental)",
 )
 @click.option(
     "--monte-carlo-iterations",
     type=int,
     default=100,
     help="Number of Monte Carlo iterations if using monte-carlo method",
+)
+@click.option(
+    "--min-checklists-per-region",
+    type=int,
+    default=6000000,
+    help="Minimum checklists per region for continental method (default: 6M)",
 )
 @click.option(
     "--verbose",
@@ -69,6 +75,7 @@ def main(
     output_registry: Path,
     method: str,
     monte_carlo_iterations: int,
+    min_checklists_per_region: int,
     verbose: bool,
 ):
     """
@@ -97,31 +104,35 @@ def main(
     pack_manifest = create_pack_manifest(density_data, max_pack_size_mb=max_pack_size_mb)
 
     logger.info(
-        "Pack manifest: %d packs, %.2f GB total",
+        "Pack manifest: %d packs",
         len(pack_manifest["packs"]),
-        sum(p["estimated_size_mb"] for p in pack_manifest["packs"]) / 1024,
     )
 
     # Partition into regions
-    logger.info("Partitioning packs into regions (max region size: %.1f MB)...", max_region_size_mb)
+    logger.info("Partitioning packs into regions using %s method...", method)
 
-    partitioner = RegionPartitioner(max_size_mb=max_region_size_mb)
+    partitioner = RegionPartitioner(
+        max_size_mb=max_region_size_mb, min_checklists=min_checklists_per_region
+    )
 
     if method == "greedy":
         regions = partitioner.partition_greedy(pack_manifest["packs"])
-    else:
+    elif method == "monte-carlo":
         regions = partitioner.partition_monte_carlo(
             pack_manifest["packs"], iterations=monte_carlo_iterations
         )
+    else:  # continental
+        regions = partitioner.partition_continental(pack_manifest["packs"])
 
     logger.info("Created %d regions", len(regions))
 
     # Generate region names
     logger.info("Generating region names...")
     namer = RegionNamer()
+    region_counter = {}  # Track region numbers within M49 areas
 
     for region in regions:
-        region["region_id"] = namer.name_region(region)
+        region["region_id"] = namer.name_region(region, region_counter)
         region["release_name"] = f"{region['region_id']}-2025.08"  # CalVer placeholder
 
     # Build registry
@@ -143,8 +154,6 @@ def main(
     logger.info("=" * 60)
     logger.info("Done!")
     logger.info("Total regions: %d", len(regions))
-    logger.info("Average region size: %.1f MB", registry["average_region_size_mb"])
-    logger.info("Total coverage: %.2f GB", registry["total_size_gb"])
 
 
 def load_density_reports(reports_dir: Path) -> list[dict]:
@@ -224,7 +233,7 @@ def create_pack_manifest(density_data: list[dict], max_pack_size_mb: float = 500
                 "data_resolution": cell_data["recommended_data_resolution"],
                 "center_lat": cell_data["center_lat"],
                 "center_lon": cell_data["center_lon"],
-                "estimated_size_mb": cell_data["estimated_pack_size_mb"],
+                "estimated_size_mb": -1,  # Placeholder - actual size set by ebird-builder
                 "total_checklists": cell_data["complete_checklists"],
             }
             selected_packs.append(pack)
@@ -245,10 +254,9 @@ def create_pack_manifest(density_data: list[dict], max_pack_size_mb: float = 500
                 if children_found == 0:
                     # No children available - use current cell anyway
                     logger.warning(
-                        "Cell %s at res %d is too large (%.1f MB) but no children at res %d - using anyway",
+                        "Cell %s at res %d but no children at res %d - using anyway",
                         cell_data["h3_cell"],
                         current_res,
-                        cell_data["estimated_pack_size_mb"],
                         next_res,
                     )
                     pack = {
@@ -258,7 +266,7 @@ def create_pack_manifest(density_data: list[dict], max_pack_size_mb: float = 500
                         "data_resolution": cell_data["recommended_data_resolution"],
                         "center_lat": cell_data["center_lat"],
                         "center_lon": cell_data["center_lon"],
-                        "estimated_size_mb": cell_data["estimated_pack_size_mb"],
+                        "estimated_size_mb": -1,  # Placeholder - actual size set by ebird-builder
                         "total_checklists": cell_data["complete_checklists"],
                     }
                     selected_packs.append(pack)
@@ -271,7 +279,7 @@ def create_pack_manifest(density_data: list[dict], max_pack_size_mb: float = 500
                     "data_resolution": cell_data["recommended_data_resolution"],
                     "center_lat": cell_data["center_lat"],
                     "center_lon": cell_data["center_lon"],
-                    "estimated_size_mb": cell_data["estimated_pack_size_mb"],
+                    "estimated_size_mb": -1,  # Placeholder - actual size set by ebird-builder
                     "total_checklists": cell_data["complete_checklists"],
                 }
                 selected_packs.append(pack)

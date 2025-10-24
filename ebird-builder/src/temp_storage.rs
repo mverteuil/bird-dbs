@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 /// Temporary storage for observations during single-pass processing
 ///
 /// Writes observations to a single temporary SQLite database with region_id tags.
@@ -21,6 +23,7 @@ pub struct TempObservationStorage {
 
 struct ObservationRow {
     region_id: String,
+    taxon_concept_id: String,
     scientific_name: String,
     latitude: f64,
     longitude: f64,
@@ -45,6 +48,7 @@ impl TempObservationStorage {
         conn.execute(
             "CREATE TABLE observations (
                 region_id TEXT NOT NULL,
+                taxon_concept_id TEXT NOT NULL,
                 scientific_name TEXT NOT NULL,
                 latitude REAL NOT NULL,
                 longitude REAL NOT NULL,
@@ -71,6 +75,7 @@ impl TempObservationStorage {
 
         self.batch.push(ObservationRow {
             region_id: region_id.to_string(),
+            taxon_concept_id: record.taxon_concept_id.clone(),
             scientific_name: record.scientific_name.clone(),
             latitude: record.latitude,
             longitude: record.longitude,
@@ -95,14 +100,15 @@ impl TempObservationStorage {
         {
             let mut stmt = tx.prepare_cached(
                 "INSERT INTO observations (
-                    region_id, scientific_name, latitude, longitude,
+                    region_id, taxon_concept_id, scientific_name, latitude, longitude,
                     observation_date, checklist_id, observation_count
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
 
             for row in &self.batch {
                 stmt.execute(params![
                     row.region_id,
+                    row.taxon_concept_id,
                     row.scientific_name,
                     row.latitude,
                     row.longitude,
@@ -139,26 +145,27 @@ impl TempObservationStorage {
         region_id: &str,
     ) -> Result<Vec<EBirdRecord>> {
         let mut stmt = conn.prepare(
-            "SELECT scientific_name, latitude, longitude, observation_date,
+            "SELECT taxon_concept_id, scientific_name, latitude, longitude, observation_date,
                     checklist_id, observation_count
              FROM observations
              WHERE region_id = ?1",
         )?;
 
         let rows = stmt.query_map(params![region_id], |row| {
-            let count_int: Option<i32> = row.get(5)?;
+            let count_int: Option<i32> = row.get(6)?;
             let observation_count = match count_int {
                 Some(n) => n.to_string(),
                 None => "X".to_string(),
             };
 
             Ok(EBirdRecord {
-                scientific_name: row.get(0)?,
+                taxon_concept_id: row.get(0)?,
+                scientific_name: row.get(1)?,
                 common_name: String::new(), // Not stored
-                latitude: row.get(1)?,
-                longitude: row.get(2)?,
-                observation_date: row.get(3)?,
-                sampling_event_id: row.get(4)?,
+                latitude: row.get(2)?,
+                longitude: row.get(3)?,
+                observation_date: row.get(4)?,
+                sampling_event_id: row.get(5)?,
                 group_identifier: None,
                 observation_count,
                 // These fields were already filtered in pass 1

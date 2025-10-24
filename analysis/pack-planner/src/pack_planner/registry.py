@@ -23,7 +23,6 @@ class RegistryBuilder:
         """
         logger.info("Building pack registry for %d regions", len(regions))
 
-        total_size_mb = sum(r["size_mb"] for r in regions)
         total_packs = sum(r["pack_count"] for r in regions)
 
         registry_regions = []
@@ -37,7 +36,7 @@ class RegistryBuilder:
                 "h3_cells": region["h3_cells"],
                 "resolution": h3.get_resolution(region["h3_cells"][0]),
                 "release_name": region["release_name"],
-                "total_size_mb": round(region["size_mb"], 2),
+                "total_size_mb": -1,  # Placeholder - actual size set by ebird-builder
                 "pack_count": region["pack_count"],
                 "center": region["center"],
                 "bbox": bbox,
@@ -50,8 +49,6 @@ class RegistryBuilder:
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "total_regions": len(regions),
             "total_packs": total_packs,
-            "total_size_gb": round(total_size_mb / 1024, 2),
-            "average_region_size_mb": round(total_size_mb / len(regions), 2),
             "regions": registry_regions,
         }
 

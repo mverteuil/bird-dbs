@@ -1,6 +1,7 @@
 use super::grid::H3Grid;
 use crate::config::FilterConfig;
 use crate::ebird::EBirdRecord;
+use crate::taxon_registry::{normalize_species_name, TaxonRegistry};
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate};
 use h3o::CellIndex;
@@ -10,7 +11,6 @@ pub struct H3Aggregator {
     pub grid: H3Grid,
     pub cells: HashMap<CellIndex, H3CellData>,
     pub sampling_data: HashMap<CellIndex, usize>,
-    pub avibase_mapping: HashMap<String, String>,
 }
 
 pub struct H3CellData {
@@ -25,7 +25,9 @@ pub struct H3CellData {
 }
 
 pub struct SpeciesAccumulator {
+    pub avibase_id: String,
     pub scientific_name: String,
+    pub is_species_level: bool,  // Track if avibase_id came from species-level record
     pub checklists: HashSet<String>,
     pub complete_checklists: HashSet<String>,
 
@@ -129,29 +131,28 @@ pub struct GridCellPack {
 }
 
 impl H3Aggregator {
-    pub fn new(resolution: u8, avibase_mapping: HashMap<String, String>) -> Result<Self> {
+    pub fn new(resolution: u8) -> Result<Self> {
         Ok(Self {
             grid: H3Grid::new(resolution)?,
             cells: HashMap::new(),
             sampling_data: HashMap::new(),
-            avibase_mapping,
         })
     }
 
     pub fn new_with_sampling(
         resolution: u8,
         sampling_data: HashMap<CellIndex, usize>,
-        avibase_mapping: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self {
             grid: H3Grid::new(resolution)?,
             cells: HashMap::new(),
             sampling_data,
-            avibase_mapping,
         })
     }
 
-    pub fn add_record(&mut self, record: &EBirdRecord) -> Result<()> {
+    /// Add a record to the aggregator
+    /// The canonical_taxon_id should come from the global TaxonRegistry
+    pub fn add_record(&mut self, record: &EBirdRecord, canonical_taxon_id: &str) -> Result<()> {
         let h3_cell = self
             .grid
             .lat_lon_to_cell(record.latitude, record.longitude)?;
@@ -161,16 +162,48 @@ impl H3Aggregator {
             H3CellData::new(h3_cell, lat, lon)
         });
 
-        cell_data.add_observation(record)?;
+        cell_data.add_observation(record, canonical_taxon_id)?;
         Ok(())
     }
 
-    pub fn finalize(self, config: &FilterConfig) -> Vec<GridCellPack> {
+    /// Finalize aggregation and produce grid cell packs
+    /// The global_registry is used for post-aggregation sync to ensure all cells
+    /// have the correct canonical taxon IDs
+    pub fn finalize(mut self, config: &FilterConfig, global_registry: &TaxonRegistry) -> Vec<GridCellPack> {
+        // CRITICAL: Sync all cell species IDs with the global registry BEFORE finalizing
+        // This ensures all cells use the correct species-level taxon IDs regardless of
+        // the order in which records were encountered during aggregation
+        let mut sync_count = 0;
+        for cell in self.cells.values_mut() {
+            for (normalized_name, species) in &mut cell.species {
+                if let Some(canonical_id) = global_registry.get_canonical_id(normalized_name) {
+                    if species.avibase_id != canonical_id {
+                        log::debug!(
+                            "Post-aggregation sync for '{}' in cell: '{}' → '{}'",
+                            normalized_name,
+                            species.avibase_id,
+                            canonical_id
+                        );
+                        species.avibase_id = canonical_id.to_string();
+                        // Assume canonical ID is always species-level (true by construction)
+                        species.is_species_level = true;
+                        sync_count += 1;
+                    }
+                }
+            }
+        }
+
+        if sync_count > 0 {
+            log::info!(
+                "Post-aggregation: Synced {} cell-species entries with global registry",
+                sync_count
+            );
+        }
+
         let sampling_data = &self.sampling_data;
-        let avibase_mapping = &self.avibase_mapping;
         self.cells
             .into_values()
-            .map(|cell| cell.finalize(&self.grid, config, sampling_data, avibase_mapping))
+            .map(|cell| cell.finalize(&self.grid, config, sampling_data))
             .collect()
     }
 }
@@ -189,7 +222,7 @@ impl H3CellData {
         }
     }
 
-    pub fn add_observation(&mut self, record: &EBirdRecord) -> Result<()> {
+    pub fn add_observation(&mut self, record: &EBirdRecord, canonical_taxon_id: &str) -> Result<()> {
         let checklist_id = record.get_checklist_id();
 
         // Track checklists
@@ -208,11 +241,14 @@ impl H3CellData {
         let normalized_name = normalize_species_name(&record.scientific_name);
 
         // Add to species accumulator using normalized name as key
+        // Use canonical taxon_concept_id from global registry (already determined at aggregator level)
         let species = self
             .species
             .entry(normalized_name.clone())
             .or_insert_with(|| SpeciesAccumulator {
+                avibase_id: canonical_taxon_id.to_string(),
                 scientific_name: normalized_name.clone(),
+                is_species_level: true, // Canonical ID is always the best one
                 checklists: HashSet::new(),
                 complete_checklists: HashSet::new(),
                 first_observation: None,
@@ -229,6 +265,13 @@ impl H3CellData {
                 weekly_obs: [0; 48],
                 weekly_checklists: std::array::from_fn(|_| HashSet::new()),
             });
+
+        // CRITICAL: Always sync avibase_id with canonical ID from global registry
+        // The global registry may have been upgraded since this cell's species entry was created
+        if species.avibase_id != canonical_taxon_id {
+            species.avibase_id = canonical_taxon_id.to_string();
+            species.is_species_level = true;
+        }
 
         // Update overall dates (all observations)
         species.first_observation = Some(
@@ -306,7 +349,6 @@ impl H3CellData {
         grid: &H3Grid,
         config: &FilterConfig,
         sampling_data: &HashMap<CellIndex, usize>,
-        avibase_mapping: &HashMap<String, String>,
     ) -> GridCellPack {
         let total_complete = self.complete_checklists.len() as f64;
         let total_sampled = sampling_data.get(&self.h3_cell).copied();
@@ -394,20 +436,9 @@ impl H3CellData {
                     total_complete,
                 );
 
-                // Look up avibase_id (species name already normalized during aggregation)
-                let avibase_id = avibase_mapping
-                    .get(&acc.scientific_name)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        log::warn!(
-                            "No avibase_id found for species: {}",
-                            acc.scientific_name
-                        );
-                        format!("unknown-{}", acc.scientific_name)
-                    });
-
+                // Use avibase_id directly from accumulator (populated from record.taxon_concept_id)
                 Some(SpeciesData {
-                    avibase_id,
+                    avibase_id: acc.avibase_id,
                     scientific_name: acc.scientific_name,
                     yearly_frequency,
                     total_observations: total_obs,
@@ -589,53 +620,6 @@ pub(crate) fn compute_weekly_data_from_aggregates(
         })
         .filter(|w| w.observations > 0 || w.checklists > 0)
         .collect()
-}
-
-/// Normalize species name for avibase ID lookup
-/// Handles slashes (subspecies/variants), hybrids, and parenthetical descriptions
-pub fn normalize_species_name(name: &str) -> String {
-    // Remove parenthetical descriptions first (e.g., "Aves sp. (goose sp.)" → "Aves sp.")
-    let name = if let Some(paren_start) = name.find('(') {
-        name[..paren_start].trim()
-    } else {
-        name
-    };
-
-    // Handle slash notation - take first species (e.g., "Anas platyrhynchos/wyvilliana" → "Anas platyrhynchos")
-    if let Some(slash_pos) = name.find('/') {
-        let before_slash = name[..slash_pos].trim();
-
-        // Check if the original name ends with " sp." or " spp." (spuh indicator)
-        // If so, preserve it after extracting the first genus/species
-        let has_spuh = name.ends_with(" sp.") || name.ends_with(" spp.");
-
-        if has_spuh {
-            // Preserve the spuh indicator: "Alca/Pinguinus sp." → "Alca sp."
-            format!("{} sp.", before_slash)
-        } else {
-            // Regular slash notation: "Anas platyrhynchos/wyvilliana" → "Anas platyrhynchos"
-            before_slash.to_string()
-        }
-    }
-    // Handle hybrid notation - take first species (e.g., "Cairina moschata x Anas platyrhynchos" → "Cairina moschata")
-    else if let Some(x_pos) = name.find(" x ") {
-        let before_x = name[..x_pos].trim();
-
-        // Check if the original name ends with " sp." or " spp." (spuh indicator)
-        let has_spuh = name.ends_with(" sp.") || name.ends_with(" spp.");
-
-        if has_spuh {
-            // Preserve the spuh indicator: "Genus1 x Genus2 sp." → "Genus1 sp."
-            format!("{} sp.", before_x)
-        } else {
-            // Regular hybrid notation
-            before_x.to_string()
-        }
-    }
-    // Return as-is if no special patterns
-    else {
-        name.to_string()
-    }
 }
 
 pub(crate) fn classify_species(yearly_frequency: f64) -> (String, f64) {

@@ -73,16 +73,30 @@ class RegionNamer:
         },
     }
 
-    def name_region(self, region: dict) -> str:
+    def name_region(self, region: dict, region_counter: dict[str, int]) -> str:
         """
-        Generate region name from geographic center.
+        Generate region name from custom region tag (no sequential numbering).
 
         Args:
-            region: Region dict with center lat/lon
+            region: Region dict with m49_region tag and center lat/lon
+            region_counter: Counter dict (unused, kept for API compatibility)
 
         Returns:
-            Region slug (e.g., "na-west-coast", "europe-central")
+            Region slug (e.g., "northern-america-west", "middle-east")
         """
+        # Use m49_region tag directly (one region pack per boundary)
+        if "m49_region" in region:
+            slug = region["m49_region"]
+
+            logger.debug(
+                "Named region at (%.2f, %.2f) as: %s",
+                region["center"]["lat"],
+                region["center"]["lon"],
+                slug,
+            )
+            return slug
+
+        # Fallback to old logic for regions without M49 tag
         lat = region["center"]["lat"]
         lon = region["center"]["lon"]
 
@@ -98,11 +112,15 @@ class RegionNamer:
         # Determine subregion
         subregion = self._get_subregion(continent, lat, lon)
 
-        # Create slug
+        # Create slug with counter
+        if continent not in region_counter:
+            region_counter[continent] = 0
+        region_counter[continent] += 1
+
         if subregion:
-            slug = f"{continent}-{subregion}"
+            slug = f"{continent}-{subregion}-{region_counter[continent]:02d}"
         else:
-            slug = continent
+            slug = f"{continent}-{region_counter[continent]:02d}"
 
         logger.debug("Named region at (%.2f, %.2f) as: %s", lat, lon, slug)
 

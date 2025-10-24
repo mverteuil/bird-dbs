@@ -5,10 +5,14 @@ use serde::Deserialize;
 /// Full implementation would have all ~50 fields from EBD
 #[derive(Debug, Clone, Deserialize)]
 pub struct EBirdRecord {
+    #[serde(rename = "TAXON CONCEPT ID")]
+    pub taxon_concept_id: String, // Avibase ID (e.g., "avibase-C6B5497C")
+
     #[serde(rename = "SCIENTIFIC NAME")]
     pub scientific_name: String,
 
     #[serde(rename = "COMMON NAME")]
+    #[allow(dead_code)]
     pub common_name: String,
 
     #[serde(rename = "OBSERVATION COUNT")]

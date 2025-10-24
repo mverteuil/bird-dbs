@@ -49,3 +49,7 @@ path = "src/bin/benchmark.rs"
 [[bin]]
 name = "read_benchmark"
 path = "src/bin/read_benchmark.rs"
+
+[[bin]]
+name = "build-taxon-registry"
+path = "src/bin/build_taxon_registry.rs"

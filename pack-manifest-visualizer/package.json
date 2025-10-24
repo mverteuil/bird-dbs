@@ -1,0 +1,30 @@
+{
+  "name": "pack-manifest-visualizer",
+  "version": "1.0.0",
+  "description": "Static site generator for visualizing H3 hexagon pack manifests on an interactive map",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "pack-manifest-visualizer": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "h3",
+    "visualization",
+    "map",
+    "ebird"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "h3-js": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  }
+}

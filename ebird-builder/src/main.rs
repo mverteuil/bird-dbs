@@ -1,9 +1,10 @@
-mod avilistr;
+// mod avilistr; // No longer needed - using TAXON CONCEPT ID from eBird data directly
 mod config;
 mod db;
 mod density_loader;
 mod ebird;
 mod h3;
+mod taxon_registry;
 mod temp_storage;
 
 use anyhow::Result;
@@ -40,10 +41,6 @@ struct Cli {
     #[arg(short = 'd', long)]
     density_reports: Option<PathBuf>,
 
-    /// Avilistr mapping CSV (scientific_name -> avibase_id)
-    #[arg(short = 'a', long)]
-    avilistr: PathBuf,
-
     /// Date range start (YYYY-MM-DD)
     #[arg(long, default_value = "2020-01-01")]
     date_start: String,
@@ -55,6 +52,10 @@ struct Cli {
     /// Only process regions matching this prefix (optional, for testing)
     #[arg(long)]
     region_filter: Option<String>,
+
+    /// Path to pre-built taxon registry JSON (from build-taxon-registry tool)
+    #[arg(short = 't', long)]
+    taxon_registry: PathBuf,
 }
 
 /// Metadata for a region's aggregator
@@ -73,6 +74,14 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let cli = Cli::parse();
+
+    // Load taxon registry
+    info!("Loading taxon registry from {:?}", cli.taxon_registry);
+    let registry = taxon_registry::TaxonRegistry::load_from_file(&cli.taxon_registry)?;
+    info!(
+        "  ✓ Loaded registry: {} species from release {}",
+        registry.species_count, registry.ebird_release
+    );
 
     // Load pack manifest
     info!("Loading pack manifest from {:?}", cli.manifest);
@@ -97,10 +106,6 @@ fn main() -> Result<()> {
         regions_to_process.len(),
         manifest.regions.len()
     );
-
-    // Load avibase ID mapping
-    info!("Loading avibase ID mapping from {:?}", cli.avilistr);
-    let avibase_mapping = avilistr::load_avibase_mapping(&cli.avilistr)?;
 
     // Create output directory
     std::fs::create_dir_all(&cli.output_dir)?;
@@ -160,9 +165,9 @@ fn main() -> Result<()> {
 
         // Create H3 aggregator with sampling data
         let aggregator = if sampling_data.is_empty() {
-            H3Aggregator::new(h3_resolution, avibase_mapping.clone())?
+            H3Aggregator::new(h3_resolution)?
         } else {
-            H3Aggregator::new_with_sampling(h3_resolution, sampling_data, avibase_mapping.clone())?
+            H3Aggregator::new_with_sampling(h3_resolution, sampling_data)?
         };
 
         region_aggregators.push(RegionAggregator {
@@ -224,6 +229,9 @@ fn main() -> Result<()> {
         .map(|agg| Arc::new(Mutex::new(agg)))
         .collect();
 
+    // Wrap registry in Arc for thread-safe read-only access
+    let shared_registry = Arc::new(registry);
+
     // Shared counters
     let record_count = Arc::new(Mutex::new(0u64));
     let filtered_count = Arc::new(Mutex::new(0u64));
@@ -233,8 +241,10 @@ fn main() -> Result<()> {
     // Create channel for batched records
     let (tx, rx) = crossbeam_channel::bounded::<Vec<EBirdRecord>>(100);
 
-    // Clone references for the processing thread
+    // Clone references for the processing thread and finalization
     let proc_aggregators = shared_aggregators.clone();
+    let proc_registry = shared_registry.clone();
+    let finalize_registry = shared_registry.clone();
     let proc_record_count = record_count.clone();
     let proc_filtered_count = filtered_count.clone();
     let proc_routed_count = routed_count.clone();
@@ -274,6 +284,12 @@ fn main() -> Result<()> {
                     }
                 };
 
+                // Look up canonical taxon ID from global registry
+                let normalized_name = taxon_registry::normalize_species_name(&record.scientific_name);
+                let canonical_taxon_id = proc_registry
+                    .get_canonical_id(&normalized_name)
+                    .unwrap_or(&record.taxon_concept_id);  // Fallback to record's ID if not in registry
+
                 // Route to ALL matching region aggregators
                 for shared_agg in &proc_aggregators {
                     let mut agg = shared_agg.lock().unwrap();
@@ -284,8 +300,8 @@ fn main() -> Result<()> {
                         agg.total_checklists.insert(record.get_checklist_id());
                         agg.total_observations += 1;
 
-                        // Add to aggregator
-                        if let Err(e) = agg.aggregator.add_record(&record) {
+                        // Add to aggregator with canonical taxon ID
+                        if let Err(e) = agg.aggregator.add_record(&record, canonical_taxon_id) {
                             log::error!("Error adding record: {}", e);
                         }
                         batch_routed += 1;
@@ -353,7 +369,7 @@ fn main() -> Result<()> {
     let final_routed_count = *routed_count.lock().unwrap();
 
     // Unwrap aggregators from Arc<Mutex<>>
-    let mut region_aggregators: Vec<RegionAggregator> = shared_aggregators
+    let region_aggregators: Vec<RegionAggregator> = shared_aggregators
         .into_iter()
         .map(|arc| {
             Arc::try_unwrap(arc)
@@ -389,7 +405,7 @@ fn main() -> Result<()> {
     // Track actual file sizes for manifest update
     let mut region_sizes: HashMap<String, f64> = HashMap::new();
 
-    for mut region_agg in region_aggregators {
+    for region_agg in region_aggregators {
         info!("\nProcessing region: {}", region_agg.region_id);
 
         if region_agg.total_observations == 0 {
@@ -403,8 +419,8 @@ fn main() -> Result<()> {
             region_agg.total_checklists.len()
         );
 
-        // Finalize aggregation
-        let grid_cells = region_agg.aggregator.finalize(&default_filters);
+        // Finalize aggregation with global registry
+        let grid_cells = region_agg.aggregator.finalize(&default_filters, &finalize_registry);
 
         let total_species: usize = grid_cells.iter().map(|c| c.species.len()).sum();
         info!(

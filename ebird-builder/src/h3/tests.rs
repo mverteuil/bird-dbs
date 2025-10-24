@@ -9,26 +9,24 @@ mod tests {
     use super::super::grid::H3Grid;
     use crate::config::FilterConfig;
     use crate::ebird::EBirdRecord;
+    use crate::taxon_registry::{normalize_species_name, TaxonRegistry};
     use chrono::NaiveDate;
-    use std::collections::HashMap;
 
-    fn test_avibase_mapping() -> HashMap<String, String> {
-        let mut mapping = HashMap::new();
-        mapping.insert(
-            "Turdus migratorius".to_string(),
-            "avibase-4A2E6B9F".to_string(),
-        );
-        mapping.insert(
-            "Cyanocitta cristata".to_string(),
-            "avibase-12345678".to_string(),
-        );
-        mapping.insert("Common Species".to_string(), "avibase-COMMON01".to_string());
-        mapping.insert("Rare Species".to_string(), "avibase-RARE0001".to_string());
-        mapping
+    // Helper to create a test registry from records
+    fn build_test_registry(records: &[&EBirdRecord]) -> TaxonRegistry {
+        let mut registry = TaxonRegistry::new("test".to_string());
+        for record in records {
+            let normalized_name = normalize_species_name(&record.scientific_name);
+            let is_exact_species = record.is_species() && record.scientific_name == normalized_name;
+            registry.update_from_record(&normalized_name, &record.taxon_concept_id, is_exact_species);
+        }
+        registry.finalize();
+        registry
     }
 
     fn sample_record() -> EBirdRecord {
         EBirdRecord {
+            taxon_concept_id: "avibase-4A2E6B9F".to_string(), // American Robin
             scientific_name: "Turdus migratorius".to_string(),
             common_name: "American Robin".to_string(),
             observation_count: "2".to_string(),
@@ -100,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_h3_aggregator_creation() {
-        let aggregator = H3Aggregator::new(8, test_avibase_mapping());
+        let aggregator = H3Aggregator::new(8);
         assert!(aggregator.is_ok());
         let aggregator = aggregator.unwrap();
         assert_eq!(aggregator.cells.len(), 0);
@@ -108,17 +106,17 @@ mod tests {
 
     #[test]
     fn test_h3_aggregator_add_record() {
-        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+        let mut aggregator = H3Aggregator::new(8).unwrap();
         let record = sample_record();
 
-        let result = aggregator.add_record(&record);
+        let result = aggregator.add_record(&record, &record.taxon_concept_id);
         assert!(result.is_ok());
         assert_eq!(aggregator.cells.len(), 1);
     }
 
     #[test]
     fn test_h3_aggregator_multiple_records_same_cell() {
-        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+        let mut aggregator = H3Aggregator::new(8).unwrap();
 
         let mut record1 = sample_record();
         record1.sampling_event_id = "S111".to_string();
@@ -129,8 +127,8 @@ mod tests {
         record2.latitude = 42.3602;
         record2.longitude = -71.0590;
 
-        aggregator.add_record(&record1).unwrap();
-        aggregator.add_record(&record2).unwrap();
+        aggregator.add_record(&record1, &record1.taxon_concept_id).unwrap();
+        aggregator.add_record(&record2, &record2.taxon_concept_id).unwrap();
 
         // Should still be 1 cell
         assert_eq!(aggregator.cells.len(), 1);
@@ -142,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_h3_aggregator_multiple_records_different_cells() {
-        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+        let mut aggregator = H3Aggregator::new(8).unwrap();
 
         let mut record1 = sample_record();
         record1.latitude = 42.3601;
@@ -153,8 +151,8 @@ mod tests {
         record2.latitude = 42.4;
         record2.longitude = -71.1;
 
-        aggregator.add_record(&record1).unwrap();
-        aggregator.add_record(&record2).unwrap();
+        aggregator.add_record(&record1, &record1.taxon_concept_id).unwrap();
+        aggregator.add_record(&record2, &record2.taxon_concept_id).unwrap();
 
         // Should be 2 cells
         assert_eq!(aggregator.cells.len(), 2);
@@ -169,7 +167,7 @@ mod tests {
         let mut cell_data = H3CellData::new(cell, lat, lon);
         let record = sample_record();
 
-        let result = cell_data.add_observation(&record);
+        let result = cell_data.add_observation(&record, &record.taxon_concept_id);
         assert!(result.is_ok());
 
         assert_eq!(cell_data.total_checklists.len(), 1);
@@ -193,8 +191,8 @@ mod tests {
         record2.observation_date = "2024-12-15".to_string();
         record2.sampling_event_id = "S2".to_string();
 
-        cell_data.add_observation(&record1).unwrap();
-        cell_data.add_observation(&record2).unwrap();
+        cell_data.add_observation(&record1, &record1.taxon_concept_id).unwrap();
+        cell_data.add_observation(&record2, &record2.taxon_concept_id).unwrap();
 
         assert_eq!(
             cell_data.date_range_start,
@@ -222,8 +220,8 @@ mod tests {
         record2.scientific_name = "Cyanocitta cristata".to_string();
         record2.common_name = "Blue Jay".to_string();
 
-        cell_data.add_observation(&record1).unwrap();
-        cell_data.add_observation(&record2).unwrap();
+        cell_data.add_observation(&record1, &record1.taxon_concept_id).unwrap();
+        cell_data.add_observation(&record2, &record2.taxon_concept_id).unwrap();
 
         assert_eq!(cell_data.species.len(), 2);
     }
@@ -677,12 +675,12 @@ mod tests {
         // Add only 1 observation (below min_observations threshold)
         let mut record = sample_record();
         record.observation_count = "1".to_string(); // Override to have only 1 observation
-        cell_data.add_observation(&record).unwrap();
+        cell_data.add_observation(&record, &record.taxon_concept_id).unwrap();
 
         let mut config = default_filter_config();
         config.min_observations = 2;
 
-        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new(), &test_avibase_mapping());
+        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new());
 
         assert_eq!(pack.species.len(), 1);
     }
@@ -697,12 +695,12 @@ mod tests {
 
         // Add only 1 checklist (below min_checklists threshold)
         let record = sample_record();
-        cell_data.add_observation(&record).unwrap();
+        cell_data.add_observation(&record, &record.taxon_concept_id).unwrap();
 
         let mut config = default_filter_config();
         config.min_checklists = 2;
 
-        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new(), &test_avibase_mapping());
+        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new());
 
         assert_eq!(pack.species.len(), 1);
     }
@@ -723,15 +721,15 @@ mod tests {
         let mut record3 = sample_record();
         record3.sampling_event_id = "S1".to_string(); // Same checklist as record1
 
-        cell_data.add_observation(&record1).unwrap();
-        cell_data.add_observation(&record2).unwrap();
-        cell_data.add_observation(&record3).unwrap();
+        cell_data.add_observation(&record1, &record1.taxon_concept_id).unwrap();
+        cell_data.add_observation(&record2, &record2.taxon_concept_id).unwrap();
+        cell_data.add_observation(&record3, &record3.taxon_concept_id).unwrap();
 
         let mut config = default_filter_config();
         config.min_observations = 2;
         config.min_checklists = 2;
 
-        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new(), &test_avibase_mapping());
+        let pack = cell_data.finalize(&grid, &config, &std::collections::HashMap::new());
 
         // Should have 1 species (passes filters)
         assert_eq!(pack.species.len(), 1);
@@ -751,9 +749,9 @@ mod tests {
         for i in 0..105 {
             let mut record = sample_record();
             record.sampling_event_id = format!("S{}", i);
-            cell_data.add_observation(&record).unwrap();
+            cell_data.add_observation(&record, &record.taxon_concept_id).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new(), &test_avibase_mapping());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
         assert_eq!(pack.data_quality, "excellent");
 
         // Test "good" (50-99 complete checklists)
@@ -761,9 +759,9 @@ mod tests {
         for i in 0..60 {
             let mut record = sample_record();
             record.sampling_event_id = format!("S{}", i);
-            cell_data.add_observation(&record).unwrap();
+            cell_data.add_observation(&record, &record.taxon_concept_id).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new(), &test_avibase_mapping());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
         assert_eq!(pack.data_quality, "good");
 
         // Test "fair" (20-49 complete checklists)
@@ -771,9 +769,9 @@ mod tests {
         for i in 0..30 {
             let mut record = sample_record();
             record.sampling_event_id = format!("S{}", i);
-            cell_data.add_observation(&record).unwrap();
+            cell_data.add_observation(&record, &record.taxon_concept_id).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new(), &test_avibase_mapping());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
         assert_eq!(pack.data_quality, "fair");
 
         // Test "sparse" (<20 complete checklists)
@@ -781,25 +779,28 @@ mod tests {
         for i in 0..10 {
             let mut record = sample_record();
             record.sampling_event_id = format!("S{}", i);
-            cell_data.add_observation(&record).unwrap();
+            cell_data.add_observation(&record, &record.taxon_concept_id).unwrap();
         }
-        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new(), &test_avibase_mapping());
+        let pack = cell_data.finalize(&grid, &default_filter_config(), &std::collections::HashMap::new());
         assert_eq!(pack.data_quality, "sparse");
     }
 
     #[test]
     fn test_integration_aggregator_finalize() {
-        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+        let mut aggregator = H3Aggregator::new(8).unwrap();
 
         // Add multiple records
         for i in 0..5 {
             let mut record = sample_record();
             record.sampling_event_id = format!("S{}", i);
-            aggregator.add_record(&record).unwrap();
+            aggregator.add_record(&record, &record.taxon_concept_id).unwrap();
         }
 
         let config = default_filter_config();
-        let packs = aggregator.finalize(&config);
+        let record = sample_record();
+        let registry = build_test_registry(&[&record]);
+
+        let packs = aggregator.finalize(&config, &registry);
 
         assert_eq!(packs.len(), 1); // 1 cell
         assert_eq!(packs[0].total_checklists, 5);
@@ -840,7 +841,7 @@ mod tests {
     fn test_aggregator_with_sampling_data() {
         use std::collections::HashMap;
 
-        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+        let mut aggregator = H3Aggregator::new(8).unwrap();
 
         // Add a record
         let record = sample_record();
@@ -848,7 +849,7 @@ mod tests {
             .grid
             .lat_lon_to_cell(record.latitude, record.longitude)
             .unwrap();
-        aggregator.add_record(&record).unwrap();
+        aggregator.add_record(&record, &record.taxon_concept_id).unwrap();
 
         // Create sampling data for this cell
         let mut sampling_data = HashMap::new();
@@ -856,11 +857,12 @@ mod tests {
 
         // Create aggregator with sampling data
         let mut aggregator_with_sampling =
-            H3Aggregator::new_with_sampling(8, sampling_data.clone(), test_avibase_mapping()).unwrap();
-        aggregator_with_sampling.add_record(&record).unwrap();
+            H3Aggregator::new_with_sampling(8, sampling_data.clone()).unwrap();
+        aggregator_with_sampling.add_record(&record, &record.taxon_concept_id).unwrap();
 
         let config = default_filter_config();
-        let packs = aggregator_with_sampling.finalize(&config);
+        let registry = build_test_registry(&[&record]);
+        let packs = aggregator_with_sampling.finalize(&config, &registry);
 
         assert_eq!(packs.len(), 1);
         // Verify sampling data is included
@@ -871,7 +873,7 @@ mod tests {
     fn test_aggregator_absence_penalty_application() {
         use std::collections::HashMap;
 
-        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+        let mut aggregator = H3Aggregator::new(8).unwrap();
 
         // Add a very rare species (only 2 checklists out of 1500 sampled)
         let mut record1 = sample_record();
@@ -889,20 +891,21 @@ mod tests {
             .lat_lon_to_cell(record1.latitude, record1.longitude)
             .unwrap();
 
-        aggregator.add_record(&record1).unwrap();
-        aggregator.add_record(&record2).unwrap();
+        aggregator.add_record(&record1, &record1.taxon_concept_id).unwrap();
+        aggregator.add_record(&record2, &record2.taxon_concept_id).unwrap();
 
         // Create sampling data showing strong absence signal
         let mut sampling_data = HashMap::new();
         sampling_data.insert(cell, 1500);
 
         let mut aggregator_with_sampling =
-            H3Aggregator::new_with_sampling(8, sampling_data, test_avibase_mapping()).unwrap();
-        aggregator_with_sampling.add_record(&record1).unwrap();
-        aggregator_with_sampling.add_record(&record2).unwrap();
+            H3Aggregator::new_with_sampling(8, sampling_data).unwrap();
+        aggregator_with_sampling.add_record(&record1, &record1.taxon_concept_id).unwrap();
+        aggregator_with_sampling.add_record(&record2, &record2.taxon_concept_id).unwrap();
 
         let config = default_filter_config();
-        let packs = aggregator_with_sampling.finalize(&config);
+        let registry = build_test_registry(&[&record1, &record2]);
+        let packs = aggregator_with_sampling.finalize(&config, &registry);
 
         assert_eq!(packs.len(), 1);
 
@@ -927,7 +930,7 @@ mod tests {
     fn test_aggregator_no_penalty_common_species() {
         use std::collections::HashMap;
 
-        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+        let mut aggregator = H3Aggregator::new(8).unwrap();
 
         // Add a common species multiple times
         for i in 0..50 {
@@ -935,7 +938,7 @@ mod tests {
             record.sampling_event_id = format!("S{}", i);
             record.scientific_name = "Common Species".to_string();
             record.common_name = "Common Bird".to_string();
-            aggregator.add_record(&record).unwrap();
+            aggregator.add_record(&record, &record.taxon_concept_id).unwrap();
         }
 
         let cell = aggregator
@@ -948,18 +951,20 @@ mod tests {
         sampling_data.insert(cell, 1500);
 
         let mut aggregator_with_sampling =
-            H3Aggregator::new_with_sampling(8, sampling_data, test_avibase_mapping()).unwrap();
+            H3Aggregator::new_with_sampling(8, sampling_data).unwrap();
 
         for i in 0..50 {
             let mut record = sample_record();
             record.sampling_event_id = format!("S{}", i);
             record.scientific_name = "Common Species".to_string();
             record.common_name = "Common Bird".to_string();
-            aggregator_with_sampling.add_record(&record).unwrap();
+            aggregator_with_sampling.add_record(&record, &record.taxon_concept_id).unwrap();
         }
 
         let config = default_filter_config();
-        let packs = aggregator_with_sampling.finalize(&config);
+        let record = sample_record();
+        let registry = build_test_registry(&[&record]);
+        let packs = aggregator_with_sampling.finalize(&config, &registry);
 
         assert_eq!(packs.len(), 1);
 
@@ -981,7 +986,7 @@ mod tests {
     fn test_confidence_boost_minimum_edge_case() {
         use std::collections::HashMap;
 
-        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+        let mut aggregator = H3Aggregator::new(8).unwrap();
 
         // Create worst-case scenario for confidence_boost:
         // - Very rare species (frequency ~0.01) → base_boost = 1.0
@@ -1000,7 +1005,7 @@ mod tests {
                 // Make all observations low quality
                 record.approved = "0".to_string();  // Not approved
                 record.all_species_reported = "0".to_string();  // Not complete
-                aggregator.add_record(&record).unwrap();
+                aggregator.add_record(&record, &record.taxon_concept_id).unwrap();
             }
         }
 
@@ -1014,7 +1019,7 @@ mod tests {
         sampling_data.insert(cell, 1500);
 
         let mut aggregator_with_sampling =
-            H3Aggregator::new_with_sampling(8, sampling_data, test_avibase_mapping()).unwrap();
+            H3Aggregator::new_with_sampling(8, sampling_data).unwrap();
 
         for i in 0..3 {
             for _j in 0..5 {
@@ -1025,7 +1030,7 @@ mod tests {
                 record.approved = "0".to_string();
                 // CRITICAL: Must use complete checklists for frequency calculation to work
                 record.all_species_reported = "1".to_string();
-                aggregator_with_sampling.add_record(&record).unwrap();
+                aggregator_with_sampling.add_record(&record, &record.taxon_concept_id).unwrap();
             }
         }
 
@@ -1033,7 +1038,9 @@ mod tests {
         config.min_observations = 5;  // Allow species to pass
         config.min_checklists = 3;
 
-        let packs = aggregator_with_sampling.finalize(&config);
+        let record = sample_record();
+        let registry = build_test_registry(&[&record]);
+        let packs = aggregator_with_sampling.finalize(&config, &registry);
         assert_eq!(packs.len(), 1);
 
         let species_list = &packs[0].species;
@@ -1059,7 +1066,7 @@ mod tests {
 
     #[test]
     fn test_confidence_boost_maximum_edge_case() {
-        let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+        let mut aggregator = H3Aggregator::new(8).unwrap();
 
         // Create best-case scenario for confidence_boost:
         // - Very common species (frequency near 1.0) → base_boost = 1.3 (MAX_BOOST)
@@ -1078,11 +1085,14 @@ mod tests {
             record.all_species_reported = "1".to_string();
             record.category = Some("species".to_string());
             record.exotic_code = None;
-            aggregator.add_record(&record).unwrap();
+            aggregator.add_record(&record, &record.taxon_concept_id).unwrap();
         }
 
         let config = default_filter_config();
-        let packs = aggregator.finalize(&config);
+        let record = sample_record();
+        let registry = build_test_registry(&[&record]);
+
+        let packs = aggregator.finalize(&config, &registry);
 
         assert_eq!(packs.len(), 1);
 
@@ -1123,7 +1133,7 @@ mod tests {
         ];
 
         for (checklist_count, is_high_quality, has_sampling, min_expected, max_expected) in test_cases {
-            let mut aggregator = H3Aggregator::new(8, test_avibase_mapping()).unwrap();
+            let mut aggregator = H3Aggregator::new(8).unwrap();
 
             // Add observations
             for i in 0..checklist_count {
@@ -1140,7 +1150,7 @@ mod tests {
                     record.all_species_reported = "0".to_string();
                 }
 
-                aggregator.add_record(&record).unwrap();
+                aggregator.add_record(&record, &record.taxon_concept_id).unwrap();
             }
 
             let cell = aggregator
@@ -1148,11 +1158,15 @@ mod tests {
                 .lat_lon_to_cell(sample_record().latitude, sample_record().longitude)
                 .unwrap();
 
+            // Build test registry for finalize
+            let record = sample_record();
+            let registry = build_test_registry(&[&record]);
+
             let packs = if has_sampling {
                 let mut sampling_data = HashMap::new();
                 sampling_data.insert(cell, 1500);
                 let mut agg_with_sampling =
-                    H3Aggregator::new_with_sampling(8, sampling_data, test_avibase_mapping()).unwrap();
+                    H3Aggregator::new_with_sampling(8, sampling_data).unwrap();
 
                 for i in 0..checklist_count {
                     let mut record = sample_record();
@@ -1168,18 +1182,18 @@ mod tests {
                         record.all_species_reported = "0".to_string();
                     }
 
-                    agg_with_sampling.add_record(&record).unwrap();
+                    agg_with_sampling.add_record(&record, &record.taxon_concept_id).unwrap();
                 }
 
                 let mut config = default_filter_config();
                 config.min_observations = 1;
                 config.min_checklists = 1;
-                agg_with_sampling.finalize(&config)
+                agg_with_sampling.finalize(&config, &registry)
             } else {
                 let mut config = default_filter_config();
                 config.min_observations = 1;
                 config.min_checklists = 1;
-                aggregator.finalize(&config)
+                aggregator.finalize(&config, &registry)
             };
 
             let species = &packs[0].species[0];
@@ -1200,28 +1214,28 @@ mod tests {
 
     #[test]
     fn test_species_variants_merge_during_aggregation() {
-        // Setup: Create H3Aggregator with avibase mapping
-        let mut avibase_mapping = HashMap::new();
-        avibase_mapping.insert("Anas platyrhynchos".to_string(), "avibase-00012345".to_string());
-
-        let mut aggregator = H3Aggregator::new(7, avibase_mapping).unwrap();
+        // Setup: Create H3Aggregator
+        let mut aggregator = H3Aggregator::new(7).unwrap();
 
         // Create two records with variant species names at the same location
+        // Both have same taxon_concept_id (Mallard) - one is subspecies variant
         let mut record1 = sample_record();
+        record1.taxon_concept_id = "avibase-00012345".to_string(); // Mallard
         record1.scientific_name = "Anas platyrhynchos/wyvilliana".to_string();
         record1.latitude = 21.3069;
         record1.longitude = -157.8583;
         record1.sampling_event_id = "S001".to_string();
 
         let mut record2 = sample_record();
+        record2.taxon_concept_id = "avibase-00012345".to_string(); // Mallard
         record2.scientific_name = "Anas platyrhynchos".to_string();
         record2.latitude = 21.3069;
         record2.longitude = -157.8583;
         record2.sampling_event_id = "S002".to_string();
 
         // Add both records to the aggregator
-        aggregator.add_record(&record1).unwrap();
-        aggregator.add_record(&record2).unwrap();
+        aggregator.add_record(&record1, &record1.taxon_concept_id).unwrap();
+        aggregator.add_record(&record2, &record2.taxon_concept_id).unwrap();
 
         // Finalize with permissive filters
         let filter_config = FilterConfig {
@@ -1234,7 +1248,8 @@ mod tests {
             deduplication: crate::config::DeduplicationMode::GroupIdentifier,
         };
 
-        let grid_cells = aggregator.finalize(&filter_config);
+        let registry = build_test_registry(&[&record1, &record2]);
+        let grid_cells = aggregator.finalize(&filter_config, &registry);
 
         // Verify: Should have exactly 1 grid cell
         assert_eq!(grid_cells.len(), 1, "Expected exactly 1 grid cell");
@@ -1258,11 +1273,236 @@ mod tests {
         // Verify: Avibase ID should match the normalized name
         assert_eq!(species.avibase_id, "avibase-00012345");
     }
+
+    #[test]
+    fn test_taxon_id_preference_species_over_slash() {
+        // Test that pure species taxon IDs are preferred over slash notation IDs
+        let mut aggregator = H3Aggregator::new(7).unwrap();
+
+        // First record: slash notation (Downy/Hairy uncertain)
+        let mut record1 = sample_record();
+        record1.taxon_concept_id = "avibase-SLASH001".to_string(); // Slash notation ID
+        record1.scientific_name = "Dryobates pubescens/villosus".to_string();
+        record1.category = Some("slash".to_string()); // NOT species level
+        record1.latitude = 42.0;
+        record1.longitude = -71.0;
+        record1.sampling_event_id = "S001".to_string();
+
+        // Second record: pure species (Downy Woodpecker)
+        let mut record2 = sample_record();
+        record2.taxon_concept_id = "avibase-SPECIES01".to_string(); // Pure species ID
+        record2.scientific_name = "Dryobates pubescens".to_string();
+        record2.category = Some("species".to_string()); // Species level
+        record2.latitude = 42.0;
+        record2.longitude = -71.0;
+        record2.sampling_event_id = "S002".to_string();
+
+        // Add slash notation first
+        aggregator.add_record(&record1, &record1.taxon_concept_id).unwrap();
+
+        // Add pure species second - should UPDATE the taxon_concept_id
+        aggregator.add_record(&record2, &record2.taxon_concept_id).unwrap();
+
+        let filter_config = FilterConfig {
+            approved_only: false,
+            complete_checklists_only: false,
+            native_species_only: false,
+            min_observations: 1,
+            min_checklists: 1,
+            min_yearly_frequency: 0.0,
+            deduplication: crate::config::DeduplicationMode::GroupIdentifier,
+        };
+
+        let registry = build_test_registry(&[&record1, &record2]);
+        let grid_cells = aggregator.finalize(&filter_config, &registry);
+
+        assert_eq!(grid_cells.len(), 1, "Should have exactly 1 grid cell");
+        let cell = &grid_cells[0];
+        assert_eq!(cell.species.len(), 1, "Should have exactly 1 species");
+
+        let species = &cell.species[0];
+        assert_eq!(species.scientific_name, "Dryobates pubescens");
+
+        // CRITICAL: Should have the pure species ID, not the slash notation ID
+        assert_eq!(species.avibase_id, "avibase-SPECIES01",
+            "Should prefer pure species taxon ID over slash notation ID");
+
+        // Should have observations from both records
+        assert_eq!(species.total_checklists, 2);
+    }
+
+    #[test]
+    fn test_taxon_id_preference_species_first() {
+        // Test that when pure species comes first, we keep it
+        let mut aggregator = H3Aggregator::new(7).unwrap();
+
+        // First record: pure species (Downy Woodpecker)
+        let mut record1 = sample_record();
+        record1.taxon_concept_id = "avibase-SPECIES01".to_string();
+        record1.scientific_name = "Dryobates pubescens".to_string();
+        record1.category = Some("species".to_string());
+        record1.latitude = 42.0;
+        record1.longitude = -71.0;
+        record1.sampling_event_id = "S001".to_string();
+
+        // Second record: slash notation
+        let mut record2 = sample_record();
+        record2.taxon_concept_id = "avibase-SLASH001".to_string();
+        record2.scientific_name = "Dryobates pubescens/villosus".to_string();
+        record2.category = Some("slash".to_string());
+        record2.latitude = 42.0;
+        record2.longitude = -71.0;
+        record2.sampling_event_id = "S002".to_string();
+
+        aggregator.add_record(&record1, &record1.taxon_concept_id).unwrap();
+        aggregator.add_record(&record2, &record2.taxon_concept_id).unwrap();
+
+        let filter_config = FilterConfig {
+            approved_only: false,
+            complete_checklists_only: false,
+            native_species_only: false,
+            min_observations: 1,
+            min_checklists: 1,
+            min_yearly_frequency: 0.0,
+            deduplication: crate::config::DeduplicationMode::GroupIdentifier,
+        };
+
+        let registry = build_test_registry(&[&record1, &record2]);
+        let grid_cells = aggregator.finalize(&filter_config, &registry);
+        let species = &grid_cells[0].species[0];
+
+        // Should keep the original species ID
+        assert_eq!(species.avibase_id, "avibase-SPECIES01",
+            "Should keep pure species taxon ID when it comes first");
+    }
+
+    #[test]
+    fn test_post_aggregation_sync_across_multiple_cells() {
+        // Test that cells receiving records BEFORE the taxon ID upgrade
+        // get synced during finalize(), ensuring consistency across all cells
+        let mut aggregator = H3Aggregator::new(7).unwrap();
+
+        // Create records in THREE different cells (different lat/lon)
+        // Cell 1: Gets slash notation record ONLY (never sees species record)
+        let mut record1 = sample_record();
+        record1.taxon_concept_id = "avibase-SLASH001".to_string();
+        record1.scientific_name = "Dryobates pubescens/villosus".to_string();
+        record1.category = Some("slash".to_string());
+        record1.latitude = 42.0;  // Cell 1
+        record1.longitude = -71.0;
+        record1.sampling_event_id = "S001".to_string();
+
+        // Cell 2: Also gets slash notation ONLY (far from cell 1)
+        let mut record2 = sample_record();
+        record2.taxon_concept_id = "avibase-SLASH001".to_string();
+        record2.scientific_name = "Dryobates pubescens/villosus".to_string();
+        record2.category = Some("slash".to_string());
+        record2.latitude = 43.0;  // Cell 2 (different from cell 1)
+        record2.longitude = -72.0;
+        record2.sampling_event_id = "S002".to_string();
+
+        // Cell 3: Gets pure species record (triggers global upgrade)
+        let mut record3 = sample_record();
+        record3.taxon_concept_id = "avibase-SPECIES01".to_string();
+        record3.scientific_name = "Dryobates pubescens".to_string();
+        record3.category = Some("species".to_string());
+        record3.latitude = 44.0;  // Cell 3 (different from cells 1 & 2)
+        record3.longitude = -73.0;
+        record3.sampling_event_id = "S003".to_string();
+
+        // Add records: Cell 1 and 2 get slash IDs, then Cell 3 triggers upgrade
+        aggregator.add_record(&record1, &record1.taxon_concept_id).unwrap();
+        aggregator.add_record(&record2, &record2.taxon_concept_id).unwrap();
+        aggregator.add_record(&record3, &record3.taxon_concept_id).unwrap();  // This triggers global registry upgrade
+
+        let filter_config = FilterConfig {
+            approved_only: false,
+            complete_checklists_only: false,
+            native_species_only: false,
+            min_observations: 1,
+            min_checklists: 1,
+            min_yearly_frequency: 0.0,
+            deduplication: crate::config::DeduplicationMode::GroupIdentifier,
+        };
+
+        let registry = build_test_registry(&[&record1, &record2, &record3]);
+        let grid_cells = aggregator.finalize(&filter_config, &registry);
+
+        // Should have 3 cells
+        assert_eq!(grid_cells.len(), 3, "Should have exactly 3 grid cells");
+
+        // CRITICAL: ALL cells should have the species-level ID, even cells 1 and 2
+        // that only saw slash notation records. Post-aggregation sync should fix them.
+        for cell in &grid_cells {
+            assert_eq!(cell.species.len(), 1, "Each cell should have exactly 1 species");
+            let species = &cell.species[0];
+            assert_eq!(
+                species.scientific_name, "Dryobates pubescens",
+                "All cells should have normalized species name"
+            );
+            assert_eq!(
+                species.avibase_id, "avibase-SPECIES01",
+                "All cells should have species-level ID after post-aggregation sync, \
+                 even if they only received slash notation records"
+            );
+        }
+    }
+
+    #[test]
+    fn test_taxon_id_subspecies_variants() {
+        // Test that subspecies with different IDs get aggregated but keep first ID
+        let mut aggregator = H3Aggregator::new(7).unwrap();
+
+        // Northern Flicker subspecies 1
+        let mut record1 = sample_record();
+        record1.taxon_concept_id = "avibase-SUBSPECIES1".to_string();
+        record1.scientific_name = "Colaptes auratus".to_string();
+        record1.category = Some("species".to_string());
+        record1.latitude = 42.0;
+        record1.longitude = -71.0;
+        record1.sampling_event_id = "S001".to_string();
+
+        // Northern Flicker subspecies 2 (different taxon ID in eBird)
+        let mut record2 = sample_record();
+        record2.taxon_concept_id = "avibase-SUBSPECIES2".to_string();
+        record2.scientific_name = "Colaptes auratus".to_string();
+        record2.category = Some("species".to_string());
+        record2.latitude = 42.0;
+        record2.longitude = -71.0;
+        record2.sampling_event_id = "S002".to_string();
+
+        aggregator.add_record(&record1, &record1.taxon_concept_id).unwrap();
+        aggregator.add_record(&record2, &record2.taxon_concept_id).unwrap();
+
+        let filter_config = FilterConfig {
+            approved_only: false,
+            complete_checklists_only: false,
+            native_species_only: false,
+            min_observations: 1,
+            min_checklists: 1,
+            min_yearly_frequency: 0.0,
+            deduplication: crate::config::DeduplicationMode::GroupIdentifier,
+        };
+
+        let registry = build_test_registry(&[&record1, &record2]);
+        let grid_cells = aggregator.finalize(&filter_config, &registry);
+        let species = &grid_cells[0].species[0];
+
+        // For same species name with different subspecies IDs, first one wins
+        // (both are species-level, so no preference update happens)
+        assert_eq!(species.avibase_id, "avibase-SUBSPECIES1",
+            "Should keep first subspecies taxon ID when both are species-level");
+        assert_eq!(species.total_checklists, 2,
+            "Should aggregate both subspecies observations");
+    }
 }
+
+// Standalone tests for normalize_species_name function
+use crate::taxon_registry::normalize_species_name;
 
 #[test]
 fn test_normalize_species_name_regular() {
-    use crate::h3::aggregator::normalize_species_name;
+    // normalize_species_name now imported at module level
     // Regular species names should pass through unchanged
     assert_eq!(
         normalize_species_name("Anas platyrhynchos"),
@@ -1276,7 +1516,7 @@ fn test_normalize_species_name_regular() {
 
 #[test]
 fn test_normalize_species_name_subspecies_slash() {
-    use crate::h3::aggregator::normalize_species_name;
+    // normalize_species_name now imported at module level
     // Subspecies with slash notation should extract first species
     assert_eq!(
         normalize_species_name("Anas platyrhynchos/wyvilliana"),
@@ -1295,7 +1535,7 @@ fn test_normalize_species_name_subspecies_slash() {
 
 #[test]
 fn test_normalize_species_name_hybrids() {
-    use crate::h3::aggregator::normalize_species_name;
+    // normalize_species_name now imported at module level
     // Hybrid notation with " x " should extract first species
     assert_eq!(
         normalize_species_name("Cairina moschata x Anas platyrhynchos"),
@@ -1309,7 +1549,7 @@ fn test_normalize_species_name_hybrids() {
 
 #[test]
 fn test_normalize_species_name_parenthetical() {
-    use crate::h3::aggregator::normalize_species_name;
+    // normalize_species_name now imported at module level
     // Parenthetical descriptions should be removed
     assert_eq!(
         normalize_species_name("Aves sp. (goose sp.)"),
@@ -1328,7 +1568,7 @@ fn test_normalize_species_name_parenthetical() {
 
 #[test]
 fn test_normalize_species_name_combinations() {
-    use crate::h3::aggregator::normalize_species_name;
+    // normalize_species_name now imported at module level
     // Parenthetical + slash: remove paren first, then extract first from slash
     assert_eq!(
         normalize_species_name("Anas platyrhynchos/wyvilliana (Mallard)"),
@@ -1343,7 +1583,7 @@ fn test_normalize_species_name_combinations() {
 
 #[test]
 fn test_normalize_species_name_spuh_preservation() {
-    use crate::h3::aggregator::normalize_species_name;
+    // normalize_species_name now imported at module level
 
     // Slash notation WITH spuh indicator - should preserve " sp."
     assert_eq!(
@@ -1386,7 +1626,7 @@ fn test_normalize_species_name_spuh_preservation() {
 
 #[test]
 fn test_normalize_species_name_edge_cases() {
-    use crate::h3::aggregator::normalize_species_name;
+    // normalize_species_name now imported at module level
     // Empty string
     assert_eq!(normalize_species_name(""), "");
 
