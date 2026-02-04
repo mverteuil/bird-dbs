@@ -391,7 +391,6 @@ bird-dbs/
 │
 ├── release-publisher/                # Step 8: GitHub releases
 │
-├── ebird-builder/                    # (Legacy) Rust pack builder
 ├── ioc-builder/                      # IOC taxonomy database
 ├── wikidata-builder/                 # Wikidata translations
 ├── avilistr-builder/                 # Avibase taxonomy extraction
@@ -467,12 +466,10 @@ The entire pipeline is idempotent and can be re-run safely.
 bird-dbs/
 ├── [BUILDERS] ────────────────────────────────────────────────────────
 │   ├── ioc-builder/                   # IOC World Bird List -> SQLite
-│   ├── wikidata-builder/              # Wikidata SPARQL -> SQLite
-│   └── ebird-builder/                 # eBird Parquet -> SQLite Region Packs
+│   └── wikidata-builder/              # Wikidata SPARQL -> SQLite
 │
 ├── [ANALYSIS TOOLS] ──────────────────────────────────────────────────
-│   ├── analysis/ebird-density-analyzer/   # Rust: H3 density analysis
-│   └── analysis/pack-planner/             # Python: Region partitioning
+│   └── analysis/pack-planner/         # Python: Region partitioning
 │
 ├── [SUPPORT TOOLS] ───────────────────────────────────────────────────
 │   ├── avilistr-builder/              # R: Avibase taxonomy extraction
@@ -480,7 +477,7 @@ bird-dbs/
 │   └── release-publisher/             # Python: GitHub release automation
 │
 ├── [DATA SCRIPTS] ────────────────────────────────────────────────────
-│   └── scripts/                       # Python/DuckDB data pipeline
+│   └── scripts/                       # Python/Polars/DuckDB data pipeline
 │
 ├── [SHARED DATA] ─────────────────────────────────────────────────────
 │   ├── shared/avilistr/               # Avibase taxonomy mapping (CSV)

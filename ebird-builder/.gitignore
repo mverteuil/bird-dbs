@@ -1,6 +1,0 @@
-
-# Coverage artifacts
-*.profraw
-*.profdata
-lcov.info
-target/llvm-cov/
