@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { cellToBoundary } from 'h3-js';
+import { cellToBoundary, cellToChildren, cellToParent } from 'h3-js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,25 +33,37 @@ function generateHtml(manifestPath: string): string {
     const cells = region.h3_cells || [];
     const packs = region.packs || [];
 
-    // Group by resolution
+    // Group by resolution - compute coverage at res 5, 4, and 2
+    // For each pack boundary (res 4):
+    //   - Res 5: child cells (finer detail)
+    //   - Res 4: the boundary cell itself
+    //   - Res 2: parent cell (coarse fallback)
     const resolutionLayers = new Map<number, Set<string>>();
-
-    cells.forEach(cell => {
-      const resolution = cell.length === 15 ? parseInt(cell[1], 16) : 0;
-      if (!resolutionLayers.has(resolution)) {
-        resolutionLayers.set(resolution, new Set());
-      }
-      resolutionLayers.get(resolution)!.add(cell);
-    });
+    resolutionLayers.set(2, new Set());
+    resolutionLayers.set(4, new Set());
+    resolutionLayers.set(5, new Set());
 
     packs.forEach(pack => {
-      if (pack.boundary_cell && pack.boundary_resolution !== undefined) {
-        if (!resolutionLayers.has(pack.boundary_resolution)) {
-          resolutionLayers.set(pack.boundary_resolution, new Set());
+      if (pack.boundary_cell) {
+        // Res 4: the boundary cell itself
+        resolutionLayers.get(4)!.add(pack.boundary_cell);
+
+        // Res 5: children of the boundary cell
+        try {
+          const children = cellToChildren(pack.boundary_cell, 5);
+          children.forEach(child => resolutionLayers.get(5)!.add(child));
+        } catch (e) {
+          console.warn(`Failed to get children for ${pack.boundary_cell}:`, e);
         }
-        resolutionLayers.get(pack.boundary_resolution)!.add(pack.boundary_cell);
+
+        // Res 2: parent of the boundary cell
+        try {
+          const parent = cellToParent(pack.boundary_cell, 2);
+          if (parent) resolutionLayers.get(2)!.add(parent);
+        } catch (e) {
+          console.warn(`Failed to get parent for ${pack.boundary_cell}:`, e);
+        }
       }
-      // Note: data_resolution cells are not included in manifest, only boundary cells
     });
 
     return {
@@ -140,6 +152,16 @@ function generateHtml(manifestPath: string): string {
     .region-item.active {
       background: #e3f2fd;
       border-color: #4a90e2;
+    }
+
+    .region-item.show-all {
+      background: #f0f7ff;
+      border-color: #4a90e2;
+      border-width: 2px;
+    }
+
+    .region-item.show-all:hover {
+      background: #e3f2fd;
     }
 
     .region-name {
@@ -252,18 +274,65 @@ function generateHtml(manifestPath: string): string {
     let currentLayers = [];
     let selectedRegion = null;
 
+    // Compute global stats
+    const totalHexagons = REGIONS.reduce((sum, r) =>
+      sum + r.resolutions.reduce((s, res) => s + res.cells.length, 0), 0);
+
+    // Create combined view of all regions
+    const allRegionsCombined = {
+      id: 'ALL REGIONS',
+      center: { lat: 20, lon: 0 },
+      resolutions: (() => {
+        const combined = new Map();
+        REGIONS.forEach(region => {
+          region.resolutions.forEach(resLayer => {
+            if (!combined.has(resLayer.resolution)) {
+              combined.set(resLayer.resolution, new Set());
+            }
+            resLayer.cells.forEach(cell => combined.get(resLayer.resolution).add(cell));
+          });
+        });
+        return Array.from(combined.entries()).map(([res, cells]) => ({
+          resolution: res,
+          cells: Array.from(cells)
+        }));
+      })()
+    };
+
     // Render region list
     const regionList = document.getElementById('regionList');
+
+    // Add "Show All" button first
+    const showAllItem = document.createElement('div');
+    showAllItem.className = 'region-item show-all';
+    const showAllName = document.createElement('div');
+    showAllName.className = 'region-name';
+    showAllName.textContent = '🌍 SHOW ALL COVERAGE';
+    const showAllStats = document.createElement('div');
+    showAllStats.className = 'region-stats';
+    showAllStats.textContent = REGIONS.length + ' regions • ' + totalHexagons.toLocaleString() + ' hexagons total';
+    showAllItem.appendChild(showAllName);
+    showAllItem.appendChild(showAllStats);
+    showAllItem.onclick = () => selectRegion(allRegionsCombined, showAllItem);
+    regionList.appendChild(showAllItem);
+
+    // Add separator
+    const separator = document.createElement('div');
+    separator.style.cssText = 'border-top: 2px solid #ddd; margin: 10px 0;';
+    regionList.appendChild(separator);
+
     REGIONS.forEach((region, index) => {
       const item = document.createElement('div');
       item.className = 'region-item';
-      item.innerHTML = \`
-        <div class="region-name">\${region.id}</div>
-        <div class="region-stats">
-          \${region.resolutions.length} resolution layer(s) •
-          \${region.resolutions.reduce((sum, r) => sum + r.cells.length, 0)} hexagons
-        </div>
-      \`;
+      const nameDiv = document.createElement('div');
+      nameDiv.className = 'region-name';
+      nameDiv.textContent = region.id;
+      const statsDiv = document.createElement('div');
+      statsDiv.className = 'region-stats';
+      statsDiv.textContent = region.resolutions.length + ' resolution layer(s) • ' +
+        region.resolutions.reduce((sum, r) => sum + r.cells.length, 0) + ' hexagons';
+      item.appendChild(nameDiv);
+      item.appendChild(statsDiv);
       item.onclick = () => selectRegion(region, item);
       regionList.appendChild(item);
     });

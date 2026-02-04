@@ -3,7 +3,6 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
 
 
 class GitHubCLIError(Exception):
@@ -46,7 +45,7 @@ class GitHubClient:
 
         # Check authentication status
         try:
-            result = subprocess.run(
+            subprocess.run(
                 ["gh", "auth", "status"],
                 capture_output=True,
                 check=True,
@@ -205,3 +204,75 @@ class GitHubClient:
             return asset_name in assets
         except GitHubCLIError:
             return False
+
+    def delete_asset(self, release_name: str, asset_name: str, dry_run: bool = False) -> None:
+        """Delete an asset from a release using GitHub API.
+
+        Args:
+            release_name: Release tag name
+            asset_name: Asset filename to delete
+            dry_run: If True, print command instead of executing
+
+        Raises:
+            GitHubCLIError: If asset deletion fails
+        """
+        # First get the asset ID
+        try:
+            result = subprocess.run(
+                [
+                    "gh",
+                    "release",
+                    "view",
+                    release_name,
+                    "--repo",
+                    self.target_repo,
+                    "--json",
+                    "assets",
+                ],
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+            data = json.loads(result.stdout)
+            assets = data.get("assets", [])
+
+            # Find asset ID by name
+            asset_id = None
+            for asset in assets:
+                if asset["name"] == asset_name:
+                    asset_id = asset["id"]
+                    break
+
+            if asset_id is None:
+                raise GitHubCLIError(f"Asset {asset_name} not found in release {release_name}")
+
+            # Delete using GitHub API
+            cmd = [
+                "gh",
+                "api",
+                f"repos/{self.target_repo}/releases/assets/{asset_id}",
+                "--method",
+                "DELETE",
+            ]
+
+            if dry_run:
+                print(f"[DRY RUN] Would execute: {' '.join(cmd)}")
+                return
+
+            subprocess.run(cmd, capture_output=True, check=True, text=True)
+
+        except subprocess.CalledProcessError as e:
+            raise GitHubCLIError(
+                f"Failed to delete {asset_name} from {release_name}: {e.stderr}"
+            ) from e
+        except (json.JSONDecodeError, KeyError) as e:
+            raise GitHubCLIError(f"Failed to parse release data: {e}") from e
+
+    @property
+    def repo(self) -> str:
+        """Get the target repository name.
+
+        Returns:
+            Repository in owner/repo format
+        """
+        return self.target_repo

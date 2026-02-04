@@ -10,8 +10,8 @@ This tool automates the process of publishing regional eBird species packs to Gi
 - Creating GitHub releases for each bundle
 - Uploading `.db.gz` files as release assets
 - Adding eBird dataset attribution to each release
-- Updating manifest with download URLs
-- Uploading a global manifest release for programmatic discovery
+- Updating registry with download URLs
+- Uploading a global registry release for programmatic discovery
 
 ## Features
 
@@ -47,7 +47,7 @@ uv sync
 
 ```bash
 uv run release-publisher \
-  --manifest /path/to/pack_manifest.json \
+  --registry /path/to/pack_registry.json \
   --db-dir /path/to/region-packs/ \
   --target-repo owner/birdnetpi-ebird-packs \
   --dry-run
@@ -57,7 +57,7 @@ uv run release-publisher \
 
 ```bash
 uv run release-publisher \
-  --manifest /path/to/pack_manifest.json \
+  --registry /path/to/pack_registry.json \
   --db-dir /path/to/region-packs/ \
   --target-repo owner/birdnetpi-ebird-packs \
   --workers 16
@@ -65,12 +65,12 @@ uv run release-publisher \
 
 ### Options
 
-- `--manifest PATH`: Path to pack_manifest.json (required)
+- `--registry PATH`: Path to pack_registry.json (required)
 - `--db-dir PATH`: Directory containing .db files (required)
 - `--target-repo OWNER/REPO`: Target GitHub repository (required)
 - `--workers N`: Number of concurrent upload workers (default: 8)
 - `--dry-run`: Show what would be done without making changes
-- `--skip-manifest`: Skip uploading the global manifest release
+- `--skip-registry`: Skip uploading the global registry release
 
 ## Release Structure
 
@@ -92,15 +92,15 @@ Each bundle:
 - Includes eBird attribution
 - Lists all included regions in the release description
 
-Plus one global manifest release:
+Plus one global registry release:
 
 ```
-Release: manifest-2025.08
+Release: registry-2025.08
 Assets:
-  - pack_manifest_with_urls.json (complete region index with download URLs)
+  - pack_registry_with_urls.json (complete region index with download URLs)
 ```
 
-The manifest includes `download_url` for each region pointing to the specific bundle containing that region.
+The registry includes `download_url` for each region pointing to the specific bundle containing that region.
 
 ## eBird Attribution
 
@@ -116,7 +116,7 @@ The tool ensures proper attribution for the eBird Basic Dataset and Sampling Dat
 ```
 eBird Region Pack Release Publisher
 
-📄 Loading manifest from pack_manifest.json
+📄 Loading registry from pack_registry.json
   Found 47 regions
 
 🔧 Initializing GitHub client for owner/birdnetpi-ebird-packs
@@ -141,13 +141,13 @@ Uploading 24 bundle releases
   ...
   ✓ Uploaded ATTRIBUTION.txt
 
-Updating manifest with download URLs
+Updating registry with download URLs
   Updated 47 of 47 regions
-  ✓ Saved updated manifest to pack_manifest_with_urls.json
+  ✓ Saved updated registry to pack_registry_with_urls.json
 
-Creating manifest release: manifest-2025.08
-  ✓ Created manifest release
-  ✓ Uploaded pack_manifest_with_urls.json
+Creating registry release: registry-2025.08
+  ✓ Created registry release
+  ✓ Uploaded pack_registry_with_urls.json
 
 📊 Summary
   Bundles created: 24
@@ -163,7 +163,7 @@ Creating manifest release: manifest-2025.08
 release-publisher/
 ├── src/release_publisher/
 │   ├── cli.py           # Click CLI interface
-│   ├── manifest.py      # Pack manifest parsing (Pydantic models)
+│   ├── manifest.py      # Pack registry parsing (Pydantic models)
 │   ├── bundler.py       # Bin-packing algorithm for bundled releases
 │   ├── attribution.py   # eBird citation generation
 │   ├── github.py        # gh CLI wrapper
@@ -175,8 +175,8 @@ release-publisher/
 
 - **bundler.py**: Implements first-fit-decreasing bin packing to group region files into ≤1950MB bundles
 - **uploader.py**: Processes bundles concurrently, uploads all regions in each bundle, and tracks download URLs
-- **manifest.py**: Updated to include `download_url` field for each region pointing to the GitHub release asset
-- **cli.py**: Orchestrates the workflow: bundle → upload → update manifest → upload manifest
+- **manifest.py**: Pydantic models for pack registry including `download_url` field for each region pointing to the GitHub release asset
+- **cli.py**: Orchestrates the workflow: bundle → upload → update registry → upload registry
 
 ## Development
 
@@ -187,8 +187,8 @@ uv sync
 # Run linters
 uv run pre-commit run --all-files
 
-# Run with local manifest
-uv run release-publisher --manifest ./pack_manifest.json --db-dir ./test-packs/ --target-repo test/test-repo --dry-run
+# Run with local registry
+uv run release-publisher --registry ./pack_registry.json --db-dir ./test-packs/ --target-repo test/test-repo --dry-run
 ```
 
 ## License

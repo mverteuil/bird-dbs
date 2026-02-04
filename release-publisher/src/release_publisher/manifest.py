@@ -1,41 +1,42 @@
-"""Pack manifest parsing and validation."""
+"""Pack registry parsing and validation."""
 
 import json
+from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class PackInfo(BaseModel):
-    """Individual pack within a region."""
+class BoundingBox(BaseModel):
+    """Geographic bounding box for a region."""
 
-    pack_id: str
-    boundary_cell: str
-    boundary_resolution: int
-    data_resolution: int
-    center_lat: float
-    center_lon: float
-    estimated_size_mb: float
-    total_checklists: int
+    min_lat: float
+    max_lat: float
+    min_lon: float
+    max_lon: float
 
 
 class RegionInfo(BaseModel):
-    """Region definition from pack manifest."""
+    """Region definition from pack registry."""
 
-    h3_cells: list[str]
-    packs: list[PackInfo]
-    size_mb: float
-    pack_count: int
-    center: dict[str, float]
     region_id: str
     release_name: str = Field(..., description="GitHub release tag name")
+    h3_cells: list[str]
+    pack_count: int
+    total_size_mb: float
+    resolution: int
+    center: dict[str, float]
+    bbox: BoundingBox
     download_url: str | None = Field(None, description="GitHub release asset download URL")
 
 
-class PackManifest(BaseModel):
-    """Complete pack manifest structure."""
+class PackRegistry(BaseModel):
+    """Complete pack registry structure."""
 
+    version: str
+    generated_at: datetime
+    total_regions: int
+    total_packs: int
     regions: list[RegionInfo]
 
     @property
@@ -51,20 +52,20 @@ class PackManifest(BaseModel):
         return None
 
 
-def load_manifest(manifest_path: Path) -> PackManifest:
-    """Load and validate pack manifest from JSON file.
+def load_registry(registry_path: Path) -> PackRegistry:
+    """Load and validate pack registry from JSON file.
 
     Args:
-        manifest_path: Path to pack_manifest.json
+        registry_path: Path to pack_registry.json
 
     Returns:
-        Validated PackManifest
+        Validated PackRegistry
 
     Raises:
-        FileNotFoundError: If manifest doesn't exist
-        json.JSONDecodeError: If manifest is invalid JSON
-        pydantic.ValidationError: If manifest structure is invalid
+        FileNotFoundError: If registry doesn't exist
+        json.JSONDecodeError: If registry is invalid JSON
+        pydantic.ValidationError: If registry structure is invalid
     """
-    with open(manifest_path) as f:
+    with open(registry_path) as f:
         data = json.load(f)
-    return PackManifest(**data)
+    return PackRegistry(**data)

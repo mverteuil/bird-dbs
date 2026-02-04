@@ -7,18 +7,18 @@ from rich.console import Console
 
 from .attribution import get_default_attribution
 from .github import GitHubClient, GitHubCLIError
-from .manifest import load_manifest
-from .uploader import upload_all_bundles, update_manifest_with_urls, upload_manifest_release
+from .manifest import load_registry
+from .uploader import update_registry_with_urls, upload_all_bundles, upload_registry_release
 
 console = Console()
 
 
 @click.command()
 @click.option(
-    "--manifest",
+    "--registry",
     type=click.Path(exists=True, path_type=Path),
     required=True,
-    help="Path to pack_manifest.json",
+    help="Path to pack_registry.json",
 )
 @click.option(
     "--db-dir",
@@ -44,17 +44,17 @@ console = Console()
     help="Show what would be done without actually doing it",
 )
 @click.option(
-    "--skip-manifest",
+    "--skip-registry",
     is_flag=True,
-    help="Skip uploading the global manifest release",
+    help="Skip uploading the global registry release",
 )
 def main(
-    manifest: Path,
+    registry: Path,
     db_dir: Path,
     target_repo: str,
     workers: int,
     dry_run: bool,
-    skip_manifest: bool,
+    skip_registry: bool,
 ):
     """Publish eBird region packs to GitHub releases using bundled releases.
 
@@ -62,8 +62,8 @@ def main(
     1. Grouping region packs into ≤1950MB bundles
     2. Creating GitHub releases for each bundle
     3. Uploading .db.gz files as release assets
-    4. Updating manifest with download URLs
-    5. Uploading the updated manifest release
+    4. Updating registry with download URLs
+    5. Uploading the updated registry release
 
     The tool is idempotent - it will skip releases and assets that already exist,
     making it safe to run multiple times and resume from failures.
@@ -72,14 +72,14 @@ def main(
 
         # Dry run to see what would happen
         release-publisher \\
-            --manifest pack_manifest.json \\
+            --registry pack_registry.json \\
             --db-dir ./region-packs/ \\
             --target-repo owner/birdnetpi-ebird-packs \\
             --dry-run
 
         # Actual upload with 16 workers
         release-publisher \\
-            --manifest pack_manifest.json \\
+            --registry pack_registry.json \\
             --db-dir ./region-packs/ \\
             --target-repo owner/birdnetpi-ebird-packs \\
             --workers 16
@@ -90,10 +90,10 @@ def main(
         console.print("[yellow]🔍 DRY RUN MODE - No changes will be made[/yellow]\n")
 
     try:
-        # Load and validate manifest
-        console.print(f"📄 Loading manifest from {manifest}")
-        pack_manifest = load_manifest(manifest)
-        console.print(f"  Found {len(pack_manifest.regions)} regions\n")
+        # Load and validate registry
+        console.print(f"📄 Loading registry from {registry}")
+        pack_registry = load_registry(registry)
+        console.print(f"  Found {len(pack_registry.regions)} regions\n")
 
         # Initialize GitHub client
         console.print(f"🔧 Initializing GitHub client for {target_repo}")
@@ -102,26 +102,26 @@ def main(
 
         # Upload bundled releases
         stats, download_urls = upload_all_bundles(
-            manifest=pack_manifest,
+            registry=pack_registry,
             github=github,
             db_dir=db_dir,
             workers=workers,
             dry_run=dry_run,
         )
 
-        # Update manifest with download URLs
+        # Update registry with download URLs
         if not dry_run:
-            updated_manifest_path = manifest.parent / f"{manifest.stem}_with_urls.json"
-            update_manifest_with_urls(pack_manifest, download_urls, updated_manifest_path)
+            updated_registry_path = registry.parent / f"{registry.stem}_with_urls.json"
+            update_registry_with_urls(pack_registry, download_urls, updated_registry_path)
         else:
-            updated_manifest_path = manifest
-            console.print("\n[yellow]Skipping manifest update in dry-run mode[/yellow]")
+            updated_registry_path = registry
+            console.print("\n[yellow]Skipping registry update in dry-run mode[/yellow]")
 
-        # Upload manifest release
-        if not skip_manifest:
+        # Upload registry release
+        if not skip_registry:
             attribution = get_default_attribution()
-            upload_manifest_release(
-                manifest_path=updated_manifest_path,
+            upload_registry_release(
+                registry_path=updated_registry_path,
                 github=github,
                 attribution=attribution,
                 dry_run=dry_run,

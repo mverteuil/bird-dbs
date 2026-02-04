@@ -4,7 +4,6 @@ import json
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict
 
 from rich.console import Console
 from rich.progress import (
@@ -17,9 +16,9 @@ from rich.progress import (
 )
 
 from .attribution import EBirdAttribution, get_default_attribution
-from .bundler import ReleaseBundle, RegionFile, build_release_bundles
+from .bundler import ReleaseBundle, build_release_bundles
 from .github import GitHubClient, GitHubCLIError
-from .manifest import PackManifest
+from .manifest import PackRegistry
 
 console = Console()
 
@@ -42,7 +41,7 @@ def process_bundle_release(
     dry_run: bool,
     progress: Progress,
     task_id: TaskID,
-) -> tuple[str, Dict[str, str], bool, str | None]:
+) -> tuple[str, dict[str, str], bool, str | None]:
     """Process a single bundle: create release and upload all region packs.
 
     Args:
@@ -58,7 +57,7 @@ def process_bundle_release(
         download_urls_map: Dict mapping region_id -> download_url
     """
     release_name = bundle.release_name
-    download_urls: Dict[str, str] = {}
+    download_urls: dict[str, str] = {}
 
     try:
         # Step 1: Create release if it doesn't exist
@@ -66,7 +65,6 @@ def process_bundle_release(
             progress.console.print(
                 f"  [yellow]Release {release_name} already exists, skipping creation[/yellow]"
             )
-            release_created = False
         else:
             # Create bundle description listing all regions
             region_list = "\n".join(f"- {r.region_id}" for r in bundle.regions)
@@ -91,7 +89,6 @@ See ATTRIBUTION.txt in each release for complete terms.
                 dry_run=dry_run,
             )
             progress.console.print(f"  [green]✓ Created release {release_name}[/green]")
-            release_created = True
 
         # Step 2: Upload all .db.gz files in this bundle
         for region_file in bundle.regions:
@@ -142,18 +139,18 @@ See ATTRIBUTION.txt in each release for complete terms.
 
 
 def upload_all_bundles(
-    manifest: PackManifest,
+    registry: PackRegistry,
     github: GitHubClient,
     db_dir: Path,
     workers: int = 8,
     dry_run: bool = False,
     max_bundle_mb: int = 1950,
     version: str = "2025.08",
-) -> tuple[UploadStats, Dict[str, str]]:
+) -> tuple[UploadStats, dict[str, str]]:
     """Upload all region packs using bundled releases.
 
     Args:
-        manifest: Pack manifest
+        registry: Pack registry
         github: GitHub client
         db_dir: Directory containing .db.gz files
         workers: Number of concurrent workers
@@ -166,10 +163,10 @@ def upload_all_bundles(
     """
     stats = UploadStats()
     attribution = get_default_attribution()
-    all_download_urls: Dict[str, str] = {}
+    all_download_urls: dict[str, str] = {}
 
     # Build release bundles
-    bundles, region_to_release = build_release_bundles(manifest, db_dir, max_bundle_mb, version)
+    bundles, region_to_release = build_release_bundles(registry, db_dir, max_bundle_mb, version)
 
     console.print(f"\n[bold]Uploading {len(bundles)} bundle releases[/bold]")
     console.print(f"  Workers: {workers}")
@@ -210,46 +207,46 @@ def upload_all_bundles(
     return stats, all_download_urls
 
 
-def update_manifest_with_urls(
-    manifest: PackManifest, download_urls: Dict[str, str], output_path: Path
+def update_registry_with_urls(
+    registry: PackRegistry, download_urls: dict[str, str], output_path: Path
 ) -> None:
-    """Update manifest with download URLs and save to file.
+    """Update registry with download URLs and save to file.
 
     Args:
-        manifest: Pack manifest to update
+        registry: Pack registry to update
         download_urls: Dict mapping region_id -> download_url
-        output_path: Path to save updated manifest
+        output_path: Path to save updated registry
     """
-    console.print(f"\n[bold]Updating manifest with download URLs[/bold]")
+    console.print("\n[bold]Updating registry with download URLs[/bold]")
 
     # Update regions with download URLs
     updated_count = 0
-    for region in manifest.regions:
+    for region in registry.regions:
         if region.region_id in download_urls:
             region.download_url = download_urls[region.region_id]
             updated_count += 1
 
-    console.print(f"  Updated {updated_count} of {len(manifest.regions)} regions")
+    console.print(f"  Updated {updated_count} of {len(registry.regions)} regions")
 
-    # Save updated manifest
+    # Save updated registry
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
-        json.dump(manifest.model_dump(), f, indent=2)
+        json.dump(registry.model_dump(mode="json"), f, indent=2)
 
-    console.print(f"  [green]✓ Saved updated manifest to {output_path}[/green]")
+    console.print(f"  [green]✓ Saved updated registry to {output_path}[/green]")
 
 
-def upload_manifest_release(
-    manifest_path: Path,
+def upload_registry_release(
+    registry_path: Path,
     github: GitHubClient,
     attribution: EBirdAttribution,
     version: str = "2025.08",
     dry_run: bool = False,
 ) -> None:
-    """Create special manifest release and upload manifest JSON.
+    """Create special registry release and upload registry JSON.
 
     Args:
-        manifest_path: Path to pack_manifest.json (updated with download URLs)
+        registry_path: Path to pack_registry.json (updated with download URLs)
         github: GitHub client
         attribution: eBird attribution
         version: Version string
@@ -258,16 +255,16 @@ def upload_manifest_release(
     Raises:
         GitHubCLIError: If upload fails
     """
-    release_name = f"manifest-{version}"
-    console.print(f"\n[bold]Creating manifest release: {release_name}[/bold]")
+    release_name = f"registry-{version}"
+    console.print(f"\n[bold]Creating registry release: {release_name}[/bold]")
 
     # Create release if doesn't exist
     if github.release_exists(release_name):
         console.print(f"  [yellow]Release {release_name} already exists[/yellow]")
     else:
-        description = f"""Region Pack Manifest
+        description = f"""Region Pack Registry
 
-This manifest contains the complete list of all regional species packs and their download URLs.
+This registry contains the complete list of all regional species packs and their download URLs.
 
 Use this to programmatically discover available regions and download the appropriate species pack.
 
@@ -276,22 +273,19 @@ Data derived from:
 """
         github.create_release(
             release_name=release_name,
-            title="Region Pack Manifest",
+            title="Region Pack Registry",
             notes=description,
             dry_run=dry_run,
         )
-        console.print(f"  [green]✓ Created manifest release[/green]")
+        console.print("  [green]✓ Created registry release[/green]")
 
-    # Upload manifest JSON (always overwrite with latest)
-    if github.asset_exists(release_name, manifest_path.name):
+    # Upload registry JSON (always overwrite with latest)
+    if github.asset_exists(release_name, registry_path.name):
         console.print(
-            f"  [yellow]Deleting existing {manifest_path.name} to upload fresh version[/yellow]"
+            f"  [yellow]Deleting existing {registry_path.name} to upload fresh version[/yellow]"
         )
-        # Note: gh CLI doesn't have delete-asset, so we'd need to handle this via API
-        # For now, just skip if exists
-        console.print(
-            f"  [yellow]{manifest_path.name} already exists, skipping (manual deletion required)[/yellow]"
-        )
-    else:
-        github.upload_asset(release_name, manifest_path, dry_run=dry_run)
-        console.print(f"  [green]✓ Uploaded {manifest_path.name}[/green]")
+        github.delete_asset(release_name, registry_path.name, dry_run=dry_run)
+        console.print(f"  [green]✓ Deleted old {registry_path.name}[/green]")
+
+    github.upload_asset(release_name, registry_path, dry_run=dry_run)
+    console.print(f"  [green]✓ Uploaded {registry_path.name}[/green]")

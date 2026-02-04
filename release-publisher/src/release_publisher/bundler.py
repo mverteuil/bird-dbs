@@ -2,9 +2,8 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
 
-from .manifest import PackManifest, RegionInfo
+from .manifest import PackRegistry
 
 
 @dataclass
@@ -28,7 +27,7 @@ class ReleaseBundle:
 
     bundle_id: int
     release_name: str
-    regions: List[RegionFile]
+    regions: list[RegionFile]
     total_size_bytes: int
 
     @property
@@ -37,11 +36,11 @@ class ReleaseBundle:
         return self.total_size_bytes / 1024 / 1024
 
 
-def collect_region_files(manifest: PackManifest, db_dir: Path) -> List[RegionFile]:
+def collect_region_files(registry: PackRegistry, db_dir: Path) -> list[RegionFile]:
     """Collect all region .db.gz files with their sizes.
 
     Args:
-        manifest: Pack manifest
+        registry: Pack registry
         db_dir: Directory containing .db.gz files
 
     Returns:
@@ -49,7 +48,7 @@ def collect_region_files(manifest: PackManifest, db_dir: Path) -> List[RegionFil
     """
     region_files = []
 
-    for region in manifest.regions:
+    for region in registry.regions:
         db_file = db_dir / f"{region.release_name}.db.gz"
 
         if not db_file.exists():
@@ -73,10 +72,10 @@ def collect_region_files(manifest: PackManifest, db_dir: Path) -> List[RegionFil
 
 
 def create_bundles(
-    region_files: List[RegionFile],
+    region_files: list[RegionFile],
     max_bundle_mb: int = 1950,
     version: str = "2025.08",
-) -> List[ReleaseBundle]:
+) -> list[ReleaseBundle]:
     """Group region files into bundles using first-fit-decreasing bin packing.
 
     Args:
@@ -88,7 +87,7 @@ def create_bundles(
         List of ReleaseBundle objects
     """
     max_bundle_bytes = max_bundle_mb * 1024 * 1024
-    bundles: List[ReleaseBundle] = []
+    bundles: list[ReleaseBundle] = []
 
     for region_file in region_files:
         # Try to fit into existing bundle
@@ -116,12 +115,12 @@ def create_bundles(
 
 
 def build_release_bundles(
-    manifest: PackManifest, db_dir: Path, max_bundle_mb: int = 1950, version: str = "2025.08"
-) -> tuple[List[ReleaseBundle], Dict[str, str]]:
-    """Build release bundles from manifest and .db.gz files.
+    registry: PackRegistry, db_dir: Path, max_bundle_mb: int = 1950, version: str = "2025.08"
+) -> tuple[list[ReleaseBundle], dict[str, str]]:
+    """Build release bundles from registry and .db.gz files.
 
     Args:
-        manifest: Pack manifest
+        registry: Pack registry
         db_dir: Directory containing .db.gz files
         max_bundle_mb: Maximum bundle size in MB
         version: Version string for release names
@@ -132,7 +131,7 @@ def build_release_bundles(
         - region_to_release_map: Dict mapping region_id to release_name
     """
     # Collect all region files
-    region_files = collect_region_files(manifest, db_dir)
+    region_files = collect_region_files(registry, db_dir)
 
     print(f"\n📦 Collected {len(region_files)} region files")
     total_size_mb = sum(r.size_mb for r in region_files)
@@ -148,7 +147,7 @@ def build_release_bundles(
         )
 
     # Build region-to-release map
-    region_to_release: Dict[str, str] = {}
+    region_to_release: dict[str, str] = {}
     for bundle in bundles:
         for region_file in bundle.regions:
             region_to_release[region_file.region_id] = bundle.release_name
