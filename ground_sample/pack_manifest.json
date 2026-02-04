@@ -1,0 +1,27 @@
+{
+  "regions": [{
+    "region_id": "ground-sample",
+    "release_name": "Ground Sample Test Region v1",
+    "h3_cells": [
+      "882a128f27fffff",
+      "882a1340a9fffff",
+      "882a1358b1fffff"
+    ],
+    "packs": [{
+      "pack_id": "ground-sample-pack-1",
+      "boundary_cell": "882a128f27fffff",
+      "boundary_resolution": 3,
+      "data_resolution": 8,
+      "center_lat": 40.5,
+      "center_lon": -75.0,
+      "estimated_size_mb": 1.0,
+      "total_checklists": 0
+    }],
+    "size_mb": 1.0,
+    "pack_count": 1,
+    "center": {
+      "lat": 40.5,
+      "lon": -75.0
+    }
+  }]
+}

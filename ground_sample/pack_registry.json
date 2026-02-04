@@ -1,0 +1,30 @@
+{
+  "version": "ground-sample-v1",
+  "generated_at": "2024-01-01T00:00:00Z",
+  "total_regions": 1,
+  "total_packs": 1,
+  "regions": [
+    {
+      "region_id": "ground-sample",
+      "release_name": "Ground Sample Test Region v1",
+      "h3_cells": [
+        "882a128f27fffff",
+        "882a1340a9fffff",
+        "882a1358b1fffff"
+      ],
+      "pack_count": 1,
+      "total_size_mb": 0.006203651428222656,
+      "resolution": 8,
+      "center": {
+        "lat": 40.5,
+        "lon": -75.0
+      },
+      "bbox": {
+        "min_lat": 40.0,
+        "max_lat": 41.0,
+        "min_lon": -75.1,
+        "max_lon": -75.0
+      }
+    }
+  ]
+}

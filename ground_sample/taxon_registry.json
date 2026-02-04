@@ -1,0 +1,32 @@
+{
+  "ebird_release": "ground-sample-2024",
+  "generated_at": "2024-01-01T00:00:00Z",
+  "species_count": 5,
+  "registry": {
+    "Turdus migratorius": {
+      "taxon_concept_id": "avibase-TEST0001",
+      "is_species_level": true,
+      "total_records_seen": 13
+    },
+    "Cardinalis cardinalis": {
+      "taxon_concept_id": "avibase-TEST0002",
+      "is_species_level": true,
+      "total_records_seen": 3
+    },
+    "Passer domesticus": {
+      "taxon_concept_id": "avibase-TEST0003",
+      "is_species_level": true,
+      "total_records_seen": 2
+    },
+    "Cyanocitta cristata": {
+      "taxon_concept_id": "avibase-TEST0004",
+      "is_species_level": true,
+      "total_records_seen": 3
+    },
+    "Corvus brachyrhynchos": {
+      "taxon_concept_id": "avibase-TEST0005",
+      "is_species_level": true,
+      "total_records_seen": 1
+    }
+  }
+}
