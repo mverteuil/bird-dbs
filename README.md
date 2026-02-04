@@ -1,364 +1,532 @@
-# BirdNET-Pi Database Extractors
+# BirdNET-Pi Database Builders
 
-**Reference database builders for BirdNET-Pi**
+Reference database builders for BirdNET-Pi species filtering.
 
-⚠️ **Note:** This repository is for **DATA MAINTAINERS ONLY**. End users should download pre-built reference databases from BirdNET-Pi releases.
+## Complete Pipeline: From Raw eBird Data to Published Region Packs
 
----
+This guide documents the full pipeline to build and publish region packs from scratch.
 
-## Overview
+### Prerequisites
 
-This repository contains tools for building the reference databases used by [BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi):
+**Required Software:**
+- Python 3.11+ with [uv](https://github.com/astral-sh/uv) package manager
+- Node.js 18+ (for visualization tools)
+- [GitHub CLI](https://cli.github.com/) (`gh`) - authenticated
+- ~2TB free disk space (SSD recommended for temp files)
+- 32GB+ RAM recommended
 
-1. **IOC Reference** - Multilingual bird names from IOC World Bird List (44 languages)
-2. **Wikidata Reference** - Supplemental translations from Wikidata (4 unique languages)
-3. **eBird Region Packs** - Regional species lists with H3-based geospatial indexing
+**Input Data:**
+- `ebd_relAug-2025.tar` (~201GB) - eBird Basic Dataset
+- `ebd_sampling_relAug-2025.tar` (~7GB) - Sampling event metadata
 
-These databases are **pre-built assets** distributed with BirdNET-Pi, similar to AI models. Most users will never need to run these extractors.
-
----
-
-## Who Should Use This Repository?
-
-### ✅ You SHOULD use this repository if you are:
-- A data maintainer updating reference databases
-- Contributing improvements to extraction logic
-- Building custom region packs for new areas
-- Researching bird taxonomy and translations
-
-### ❌ You should NOT use this repository if you are:
-- An end user installing BirdNET-Pi (download pre-built databases instead)
-- A BirdNET-Pi core contributor (work on the main BirdNET-Pi repo)
-- Testing BirdNET-Pi (pre-built databases are sufficient)
+Download from [eBird Basic Dataset](https://ebird.org/data/download) (requires account).
 
 ---
 
-## Architecture
+## Pipeline Overview
 
-See [docs/architecture-decision-avilistr.md](docs/architecture-decision-avilistr.md) for full architectural details.
+```
+                                    STEP 1 (12+ hours)
+ebd_relAug-2025.tar ──────────────────────────────────────► ebird_parquet/
+     (201GB)                convert_ebird_to_parquet.py         (118GB)
+                                                                   │
+                                                                   │ STEP 2 (6+ hours)
+                                                                   │ sort_parquet_chunked.py
+                                                                   ▼
+                                                          ebird_by_location/
+                                                               (25GB)
+                                                                   │
+                           ┌───────────────────────────────────────┤
+                           │                                       │
+            STEP 3a (2.5 hours)                        STEP 3b (2.5 hours)
+     partition_by_boundary.py                     partition_by_boundary.py
+     (--discover-only)                                             │
+                           │                                       ▼
+                           ▼                              ebird_partitioned/
+                  boundary_cells.json                       (Hive-style)
+                           │
+              STEP 4 (seconds)
+        convert_discovery_to_density_report.py
+                           │
+                           ▼
+                  density_report.json
+                           │
+              STEP 4b (seconds)
+        create_bootstrap_size_manifest.py
+                           │
+                           ▼
+                  size_manifest.json (bootstrap/estimated)
+                           │
+              STEP 5 (seconds)
+         pack-planner (with --size-manifest)
+                           │
+                           ├──► pack_manifest.json
+                           └──► pack_registry.json
+                                       │
+                                       │         ebird_partitioned/
+                                       │                │
+                                       ▼                ▼
+                          STEP 6 (8-10 hours)
+                       build_packs_from_partitions.py
+                                       │
+                                       ▼
+                           region_packs/*.db (~98 regions, ~19GB)
+                                       │
+                           STEP 7 (optional)
+                        pack-manifest-visualizer
+                                       │
+                                       ▼
+                              visualization/index.html
+                                       │
+                           STEP 8 (hours)
+                          release-publisher
+                                       │
+                                       ▼
+                          GitHub Releases
 
-### Database Naming Convention
-- `ioc_reference.db` - IOC World Bird List translations
-- `wikidata_reference.db` - Wikidata supplemental translations
-- `ebird_regions/*.db` - Regional species data (H3 grids)
-
-All databases use **Avibase IDs** as stable identifiers across taxonomic changes.
-
----
-
-## Requirements
-
-### Common Requirements (All Extractors)
-- **Avilistr data**: Complete world bird list with taxonomy mappings
-  - Download from: https://avibase.bsc-eoc.org/checklist.jsp
-  - Save to: `shared/avilistr/world_birds_YYYY-MM-DD.csv`
-
-### IOC Reference Builder
-- **Language:** Python 3.8+ with R
-- **Package Manager:** uv (recommended) or pip
-- **Dependencies:**
-  - Python: sqlalchemy, pandas, requests, openpyxl
-  - R: tidyverse, readxl
-- **Data Source:** IOC World Bird List (manual download)
-  - Excel files: IOC_Names_File_Plus-XX.X.xlsx, IOC_Multiling_Names_File-XX.X.xlsx
-  - Download from: https://www.worldbirdnames.org/
-- **Hardware:** Any laptop (2GB RAM sufficient)
-- **Time:** ~10-20 minutes
-
-### Wikidata Reference Builder
-- **Language:** Python 3.8+
-- **Package Manager:** uv (recommended) or pip
-- **Dependencies:** requests, SPARQLWrapper, pandas, sqlalchemy
-- **Data Source:** Wikidata SPARQL API (live queries)
-- **Hardware:** Any laptop with internet connection
-- **Time:** ~30-60 minutes (API rate limited)
-
-### eBird Region Pack Builder
-- **Language:** Rust (stable toolchain)
-- **Dependencies:** cargo, h3ron, csv, rayon
-- **Data Source:** eBird Basic Dataset (EBD)
-  - **⚠️ RESTRICTED ACCESS:** Requires Cornell Lab research license
-  - Request access: https://ebird.org/data/download
-  - Size: 200GB+ compressed, 500GB+ uncompressed
-- **Hardware:** High-memory server (64GB+ RAM recommended)
-- **Storage:** 1TB+ available space (SSD recommended)
-- **Time:** 4-8 hours per region pack (depends on region size)
-
----
-
-## Quick Start
-
-### Phase 1: Data Collection
-
-```bash
-# Create data sources directory
-mkdir -p shared/avilistr data/ioc data/ebird
-
-# Download Avilistr world bird list
-# Visit: https://avibase.bsc-eoc.org/checklist.jsp
-# Select: World, All taxonomies, CSV export
-# Save to: shared/avilistr/world_birds_2025-10-08.csv
-
-# Download IOC multilingual files (manual)
-# Visit: https://www.worldbirdnames.org/
-# Download latest version Excel files
-# Save to: data/ioc/
-
-# Request eBird EBD access (if building region packs)
-# Visit: https://ebird.org/data/download
-# Submit research justification
-# Download to: data/ebird/ebd_relAug-2025.tar
+(OPTIONAL REFINEMENT - if estimated sizes differ significantly from actual)
+                                       │
+              create_size_manifest.py ◄┘ (from actual builds)
+                           │
+                           ▼
+              size_manifest_v2.json (measured)
+                           │
+              pack-planner (refined)
+                           │
+              pack_manifest_v2.json
+                           │
+              rebuild packs
 ```
 
-### Phase 2: Build Reference Databases
+---
 
-#### Build IOC Reference
+## Step 1: Convert eBird Tarball to Parquet
+
+Streams raw eBird TSV from tarball directly to Parquet without extracting to disk.
 
 ```bash
-cd ioc-builder
+cd bird-dbs/scripts
 
-# Install dependencies using uv
+uv run convert_ebird_to_parquet.py \
+    --input /Volumes/backup/ebird/ebd_relAug-2025.tar \
+    --output-dir /Volumes/Lightroom/ebird_parquet \
+    --chunk-size 1000000
+```
+
+**Time estimate:** 12-24 hours (depends on disk speed)
+**Output:** ~118GB in 399 Parquet files (~1M rows each)
+**Disk usage:** Only output directory (no extraction needed)
+
+**What it does:**
+- Streams `tar` -> `gzip` -> `TSV` -> `Parquet` (no intermediate files)
+- Uses Polars for efficient conversion
+- ZSTD compression (level 3)
+
+---
+
+## Step 2: Sort Parquet by Location
+
+Sort data by geographic coordinates for efficient spatial queries.
+
+```bash
+uv run sort_parquet_chunked.py \
+    --input-dir /Volumes/Lightroom/ebird_parquet \
+    --output-dir /Volumes/Lightroom/ebird_by_location \
+    --sort-order location \
+    --memory-limit 24GB \
+    --max-temp-size 200GiB
+```
+
+**Time estimate:** 6-8 hours
+**Output:** ~25GB in 18 latitude-band partitions
+**Temp space needed:** Up to 200GB per partition (cleaned automatically)
+
+**Sort orders available:**
+- `location` - Sorted by lat/lon (required for pack building)
+- `date` - Sorted by observation date
+- `taxon` - Sorted by species
+
+---
+
+## Step 3a: Discover Boundary Cells
+
+Scan all data to find which H3 boundary cells have observations.
+
+```bash
+uv run partition_by_boundary.py \
+    --input /Volumes/Lightroom/ebird_by_location \
+    --output /Volumes/Lightroom/ebird_partitioned \
+    --boundary-resolution 4 \
+    --discover-only
+```
+
+**Time estimate:** 30-60 minutes
+**Output:** `boundary_cells.json` with statistics for each cell
+
+---
+
+## Step 3b: Partition Data by Boundary Cells
+
+Partition all observations into Hive-style directories by H3 boundary cell.
+
+```bash
+uv run partition_by_boundary.py \
+    --input /Volumes/Lightroom/ebird_by_location \
+    --output /Volumes/Lightroom/ebird_partitioned \
+    --boundary-resolution 4 \
+    --memory-limit 16GB
+```
+
+**Time estimate:** 2-3 hours
+**Output:** Hive-partitioned directory structure:
+```
+ebird_partitioned/
+├── boundary_cell=842b9bdffffffff/
+│   └── data_0.parquet
+├── boundary_cell=842b9adffffffff/
+│   └── data_0.parquet
+└── ...
+```
+
+---
+
+## Step 4: Convert Discovery to Density Report
+
+Bridge the partition discovery output to pack-planner format.
+
+```bash
+uv run convert_discovery_to_density_report.py \
+    --input /Volumes/Lightroom/ebird_partitioned/boundary_cells.json \
+    --output /Volumes/Lightroom/density_report_res4.json
+```
+
+**Time estimate:** Seconds
+**Output:** `density_report_res4.json` with:
+- Estimated pack sizes
+- Recommended data resolutions
+- Coverage statistics
+
+---
+
+## Step 4b: Create Bootstrap Size Manifest
+
+Create a size manifest from density report estimates (no builds needed).
+
+```bash
+cd bird-dbs/scripts
+
+uv run create_bootstrap_size_manifest.py \
+    --density-report /Volumes/Lightroom/ebird_partitioned/density_report_res4.json \
+    --output /Volumes/Lightroom/ebird_partitioned/size_manifest.json
+```
+
+**Time estimate:** Seconds
+**Output:** `size_manifest.json` with estimated per-cell sizes from density report
+
+This bootstrap manifest uses the `estimated_pack_size_mb` values calculated during density
+report generation. These estimates are based on checklist counts and are accurate enough
+for initial region planning.
+
+---
+
+## Step 5: Pack Planning
+
+Run pack-planner with the bootstrap size manifest to create regions.
+
+```bash
+cd bird-dbs/analysis/pack-planner
 uv sync
 
-# Install R dependencies
-Rscript -e "install.packages(c('tidyverse', 'readxl'))"
-
-# Run builder
-uv run python ioc_database_builder.py \
-  --ioc-path ../data/ioc/IOC_Names_File_Plus-14.2.xlsx \
-  --multilingual-path ../data/ioc/IOC_Multiling_Names_File-14.2.xlsx \
-  --avilistr-path ../shared/avilistr/world_birds_2025-10-08.csv \
-  --output ../output/ioc_reference.db
-
-# Expected output: ioc_reference.db (~51 MB, 11,250 species, 297K translations)
+uv run pack-planner \
+    --density-reports /Volumes/Lightroom/density_reports/ \
+    --size-manifest /Volumes/Lightroom/ebird_partitioned/size_manifest.json \
+    --max-region-size-mb 250 \
+    --output-manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest.json \
+    --output-registry /Volumes/Lightroom/ebird_partitioned/pack_registry.json
 ```
 
-#### Build Wikidata Reference
+**Time estimate:** Seconds
+**Output:**
+- `pack_manifest.json` - Regions sized to ~250 MB each
+- `pack_registry.json` - Minimal registry for client lookups
+
+The planner splits oversized regions using latitude-band sorting for geographic locality.
+With ~20GB total data and 250 MB target: expect ~80-100 regions globally.
+
+**Expected results (Aug 2025 data):**
+- ~98 regions
+- Max size: ~324 MB (high-density regions like north-america-great-lakes)
+- Most regions: 150-250 MB
+- Total: ~19.3 GB
+
+---
+
+## Step 6: Build Region Packs
+
+Build the SQLite region packs.
 
 ```bash
-cd wikidata-builder
+cd bird-dbs/scripts
 
-# Install dependencies using uv
+uv run build_packs_from_partitions.py \
+    --partitioned-dir /Volumes/Lightroom/ebird_partitioned \
+    --manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest.json \
+    --output-dir /Volumes/Lightroom/region_packs
+```
+
+**Time estimate:** 8-10 hours
+**Output:** `region_packs/*.db` - ~98 region packs, ~19 GB total
+
+**Resume after interruption:**
+```bash
+uv run build_packs_from_partitions.py \
+    --partitioned-dir /Volumes/Lightroom/ebird_partitioned \
+    --manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest.json \
+    --output-dir /Volumes/Lightroom/region_packs \
+    --skip-existing
+```
+
+### Optional: Refinement Pass
+
+If pack sizes differ significantly from estimates (>20% variance), you can refine:
+
+```bash
+# 1. Create accurate size manifest from actual builds
+uv run create_size_manifest.py \
+    --packs-dir /Volumes/Lightroom/region_packs \
+    --pack-manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest.json \
+    --output /Volumes/Lightroom/ebird_partitioned/size_manifest_v2.json
+
+# 2. Re-plan with actual sizes
+cd ../analysis/pack-planner
+uv run pack-planner \
+    --density-reports /Volumes/Lightroom/density_reports/ \
+    --size-manifest /Volumes/Lightroom/ebird_partitioned/size_manifest_v2.json \
+    --max-region-size-mb 250 \
+    --output-manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest_v2.json \
+    --output-registry /Volumes/Lightroom/ebird_partitioned/pack_registry_v2.json
+
+# 3. Rebuild with optimized regions
+cd ../scripts
+rm -rf /Volumes/Lightroom/region_packs
+uv run build_packs_from_partitions.py \
+    --partitioned-dir /Volumes/Lightroom/ebird_partitioned \
+    --manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest_v2.json \
+    --output-dir /Volumes/Lightroom/region_packs
+```
+
+For most use cases, the bootstrap estimates are accurate enough and refinement is not needed.
+
+---
+
+## Step 7: Visualize Coverage (Optional)
+
+Generate an interactive map showing pack coverage.
+
+```bash
+cd bird-dbs/pack-manifest-visualizer
+npm install
+npm run build
+
+node dist/index.js /Volumes/Lightroom/pack_manifest.json ./visualization
+```
+
+**Output:** `visualization/index.html` - standalone HTML map
+
+Open in browser to explore regions and H3 cell coverage.
+
+---
+
+## Step 8: Publish to GitHub Releases
+
+Upload packs to GitHub releases for distribution.
+
+```bash
+cd bird-dbs/release-publisher
 uv sync
 
-# Run builder (full extraction with 4 languages: nb, eu, zh-hans, zh-hant)
-uv run python run_wikidata_poc.py \
-  --full \
-  --output ../output/wikidata_reference.db
+# Dry run first
+uv run release-publisher \
+    --registry /Volumes/Lightroom/pack_registry.json \
+    --db-dir /Volumes/Lightroom/packs \
+    --target-repo owner/birdnetpi-ebird-packs \
+    --dry-run
 
-# Expected output: wikidata_reference.db (~5-7 MB, ~10,500 species, ~18K translations)
+# Actual upload
+uv run release-publisher \
+    --registry /Volumes/Lightroom/pack_registry.json \
+    --db-dir /Volumes/Lightroom/packs \
+    --target-repo owner/birdnetpi-ebird-packs \
+    --workers 16
 ```
 
-#### Build eBird Region Pack
+**Time estimate:** Several hours (depends on connection speed)
+**Features:**
+- Bundles packs into ~1950MB releases (bin-packing)
+- Includes eBird attribution
+- Idempotent (safe to re-run)
+- Uploads global registry for programmatic discovery
 
-```bash
-cd ebird-builder
+---
 
-# Build Rust binary
-cargo build --release
+## Directory Structure
 
-# Extract region pack (example: Boston, MA - Suffolk County)
-./target/release/ebird-pack \
-  --input ../data/ebird/ebd_relAug-2025.tar \
-  --region us-ma-025 \
-  --avilistr ../shared/avilistr/world_birds_2025-10-08.csv \
-  --output ../output/ebird_regions/
-
-# Expected output: ebird_regions/us-ma-025.db (~2-5 MB depending on region)
+```
+bird-dbs/
+├── scripts/                          # Data processing scripts
+│   ├── convert_ebird_to_parquet.py   # Step 1: Raw TSV -> Parquet
+│   ├── sort_parquet_chunked.py       # Step 2: Sort by location
+│   ├── partition_by_boundary.py      # Step 3: H3 partitioning
+│   ├── convert_discovery_to_density_report.py  # Step 4: Format conversion
+│   ├── create_bootstrap_size_manifest.py # Step 4b: Bootstrap sizes from estimates
+│   ├── create_size_manifest.py       # (Optional) Extract sizes from actual builds
+│   ├── build_packs_from_partitions.py # Step 6: Build SQLite packs
+│   ├── convert_sampling_to_parquet.py # (Optional) Sampling events
+│   └── verify_parquet_integrity.py    # (Optional) Validation
+│
+├── analysis/
+│   └── pack-planner/                 # Step 5: Region planning
+│
+├── pack-manifest-visualizer/         # Step 7: Map visualization
+│
+├── release-publisher/                # Step 8: GitHub releases
+│
+├── ebird-builder/                    # (Legacy) Rust pack builder
+├── ioc-builder/                      # IOC taxonomy database
+├── wikidata-builder/                 # Wikidata translations
+├── avilistr-builder/                 # Avibase taxonomy extraction
+│
+├── shared/avilistr/                  # Shared taxonomy mapping
+├── ground_sample/                    # Test data
+└── docs/                             # Documentation
 ```
 
 ---
 
-## Builder Details
+## Time Estimates Summary
 
-### IOC Reference Builder
+| Step | Task | Time | Notes |
+|------|------|------|-------|
+| 1 | Tarball to Parquet | 12-24 hours | I/O bound |
+| 2 | Sort by location | 6-8 hours | CPU + I/O |
+| 3a | Discover boundaries | 30-60 min | Read-only scan |
+| 3b | Partition data | 2-3 hours | Write-heavy |
+| 4 | Density report | Seconds | Conversion only |
+| 4b | Bootstrap size manifest | Seconds | From density estimates |
+| 5 | Pack planning | Seconds | Create regions |
+| 6 | Build packs | 8-10 hours | ~98 regions |
+| 7 | Visualization | Minutes | Optional |
+| 8 | GitHub upload | Hours | Network bound |
+| **Total** | | **~30-45 hours** | Single build pass |
 
-**Purpose:** Extract IOC World Bird List translations (44 languages)
-
-**Key Features:**
-- Parses IOC Excel files (species + multilingual translations)
-- Matches IOC scientific names to Avibase IDs (via Avilistr)
-- Creates `ioc_reference.db` with `avibase_id` column
-- 44 languages with excellent coverage (10,000+ translations each)
-
-**Update Schedule:** Annually (October, when IOC releases new version)
-
-**See:** `ioc-builder/README.md` for detailed usage
-
-### Wikidata Reference Builder
-
-**Purpose:** Extract supplemental translations from Wikidata (4 unique languages)
-
-**Key Features:**
-- Queries Wikidata SPARQL API for bird species with Avibase IDs (P2026)
-- Filters out scientific name fallbacks (only real translations)
-- Extracts 4 languages NOT in IOC: Norwegian Bokmål (nb), Basque (eu), Chinese Simplified/Traditional (zh-hans, zh-hant)
-- Creates `wikidata_reference.db` with Avibase IDs
-
-**Update Schedule:** Quarterly or as needed
-
-**See:** `wikidata-builder/README.md` for detailed usage
-
-**Important:** This builder filters out 59% of Wikidata "translations" that are actually just scientific names used as fallback labels. See [docs/wikidata-data-quality-issue.md](docs/wikidata-data-quality-issue.md) for details.
-
-### eBird Region Pack Builder
-
-**Purpose:** Create H3-based regional species occurrence databases
-
-**Key Features:**
-- Processes 200GB+ eBird Basic Dataset (EBD)
-- Aggregates observations into H3 hexagonal grid cells (resolution 8)
-- Calculates species frequency, confidence tiers, seasonal patterns
-- Matches eBird/Clements taxonomy to Avibase IDs (via Avilistr)
-- Optimized Rust implementation for performance
-
-**Update Schedule:** Annually (August, when eBird releases new EBD)
-
-**See:** `ebird-builder/README.md` for detailed usage
+**Note:** Optional refinement pass adds ~8-10 hours but is usually not needed.
 
 ---
 
-## Output Databases
+## Disk Space Requirements
 
-All built databases should be placed in `output/` directory:
+| Directory | Size | Notes |
+|-----------|------|-------|
+| Input tarball | 201GB | Read-only |
+| `ebird_parquet/` | 118GB | Intermediate |
+| `ebird_by_location/` | 25GB | Sorted |
+| `ebird_partitioned/` | ~50GB | Hive-style |
+| `region_packs/` | ~19GB | Final output (~98 regions) |
+| Temp space | 200GB | During sorting |
+| **Total working** | ~610GB | Peak usage |
+
+After completion, intermediate files can be deleted:
+- `ebird_parquet/` - Safe to delete after partitioning
+- `ebird_partitioned/` - Keep if you may need to rebuild
+
+---
+
+## Annual Update Process
+
+eBird releases new data each August. To update:
+
+1. Download new `ebd_relXXX-YYYY.tar` from eBird
+2. Run Steps 1-4 (data conversion and partitioning)
+3. Run Step 4b (create bootstrap size manifest)
+4. Run Step 5 (pack planning)
+5. Run Step 6 (build packs)
+6. Verify pack integrity
+7. Publish new release (Step 8)
+
+**Note:** The bootstrap size manifest uses estimated sizes which are typically accurate
+within 10-20%. If you need more precise region boundaries, run the optional refinement
+pass after the initial build.
+
+The entire pipeline is idempotent and can be re-run safely.
+
+---
+
+## Repository Structure
 
 ```
-output/
-├── ioc_reference.db           (~51 MB)
-├── wikidata_reference.db      (~5-7 MB)
-└── ebird_regions/
-    ├── us-ca-037.db          (Los Angeles County)
-    ├── us-ma-025.db          (Suffolk County / Boston)
-    └── ...
+bird-dbs/
+├── [BUILDERS] ────────────────────────────────────────────────────────
+│   ├── ioc-builder/                   # IOC World Bird List -> SQLite
+│   ├── wikidata-builder/              # Wikidata SPARQL -> SQLite
+│   └── ebird-builder/                 # eBird Parquet -> SQLite Region Packs
+│
+├── [ANALYSIS TOOLS] ──────────────────────────────────────────────────
+│   ├── analysis/ebird-density-analyzer/   # Rust: H3 density analysis
+│   └── analysis/pack-planner/             # Python: Region partitioning
+│
+├── [SUPPORT TOOLS] ───────────────────────────────────────────────────
+│   ├── avilistr-builder/              # R: Avibase taxonomy extraction
+│   ├── pack-manifest-visualizer/      # TypeScript: H3 visualization
+│   └── release-publisher/             # Python: GitHub release automation
+│
+├── [DATA SCRIPTS] ────────────────────────────────────────────────────
+│   └── scripts/                       # Python/DuckDB data pipeline
+│
+├── [SHARED DATA] ─────────────────────────────────────────────────────
+│   ├── shared/avilistr/               # Avibase taxonomy mapping (CSV)
+│   └── ground_sample/                 # Test data with expected results
+│
+└── [DOCUMENTATION] ───────────────────────────────────────────────────
+    └── docs/
 ```
 
-These files are then uploaded as **release assets** for BirdNET-Pi.
+---
+
+## Troubleshooting
+
+### Out of disk space during sorting
+- Increase `--max-temp-size` if you have more space
+- Use a faster SSD for temp directory
+- Reduce `--memory-limit` (trades speed for less temp usage)
+
+### Pack building is slow
+- Use `--skip-existing` to resume after interruption
+- Ensure partitioned data is on SSD
+- Building ~98 regions takes 8-10 hours single-threaded
+
+### Regions still too large after size-aware planning
+- Reduce `--max-region-size-mb` (default: 250)
+- Check that size_manifest.json has complete data
+- Some high-density regions (e.g., Great Lakes) may exceed target slightly
+
+### GitHub upload fails
+- Check `gh auth status`
+- Use `--dry-run` first
+- Reduce `--workers` if rate limited
+
+### Memory errors
+- Reduce `--chunk-size` in Step 1
+- Reduce `--memory-limit` in Step 2
+
+### Size manifest missing cells
+- Ensure all regions built successfully in Step 5b
+- Check for disk I/O errors in build logs
+- Re-run initial build for failed regions
 
 ---
 
-## Testing
+## License
 
-All three builders include comprehensive test suites to ensure data quality and correctness.
+This tool builds databases from eBird data, which is subject to the [eBird Terms of Use](https://www.birds.cornell.edu/home/ebird-data-access-terms-of-use/).
 
-### Quick Start
-
-**IOC Builder:**
-```bash
-cd ioc-builder
-uv sync --extra dev
-uv run pytest
-```
-
-**Wikidata Builder:**
-```bash
-cd wikidata-builder
-uv sync --extra dev
-uv run pytest
-```
-
-**eBird Builder:**
-```bash
-cd ebird-builder
-cargo test
-```
-
-### Test Coverage
-
-- **IOC Builder:** >80% coverage - Excel parsing, Avibase mapping, database creation
-- **Wikidata Builder:** >85% coverage - SPARQL queries, scientific name filtering (critical)
-- **eBird Builder:** >75% coverage - H3 aggregation, species classification, filtering
-
-### Critical Tests
-
-1. **Scientific Name Fallback Filtering** (Wikidata) - Ensures 59% of useless fallback data is excluded
-2. **Avibase ID Mapping** (IOC + eBird) - Validates stable identifiers across taxonomic changes
-3. **H3 Grid Consistency** (eBird) - Ensures reproducible geographic indexing
-4. **Species Filtering** (eBird) - Validates approved, complete, native, species-only filters
-
-**See:** [docs/testing-guide.md](docs/testing-guide.md) for comprehensive testing documentation
-
----
-
-## Contributing
-
-### Reporting Issues
-
-- **IOC extraction bugs:** File issue in this repo with "ioc-builder" label
-- **Wikidata extraction bugs:** File issue with "wikidata-builder" label
-- **eBird region pack bugs:** File issue with "ebird-builder" label
-- **Architecture questions:** See [docs/architecture-decision-avilistr.md](docs/architecture-decision-avilistr.md)
-
-### Pull Requests
-
-1. Fork this repository
-2. Create a feature branch
-3. Set up pre-commit hooks: `pre-commit install`
-4. Make your changes
-5. Run tests: `uv run pytest` (Python) or `cargo test` (Rust)
-6. Run pre-commit checks: `pre-commit run --all-files`
-7. Submit PR with description of changes
-
-**Code Quality:**
-- Pre-commit hooks enforce code quality (ruff, cargo fmt, cargo clippy, etc.)
-- See [.pre-commit-hooks-config.md](.pre-commit-hooks-config.md) for setup and usage
-- All checks must pass before merging
-
-**Note:** CI tests only run with sample data. Full validation requires manual testing with actual IOC files / eBird EBD.
-
----
-
-## Release Process
-
-1. **Data Collection:** Download latest source data (IOC files, eBird EBD, Avilistr)
-2. **Build Databases:** Run all three extractors
-3. **Validation:**
-   - Verify species counts
-   - Check translation quality
-   - Test database schema compatibility
-4. **Tag Release:** Create git tag (e.g., `v2025.10` for October 2025 release)
-5. **Upload Assets:** Attach built databases to GitHub release
-6. **Update BirdNET-Pi:** Release manager downloads and distributes via BirdNET-Pi releases
-
----
-
-## Licenses
-
-### Code License
-- Extractor code: [Same as BirdNET-Pi - to be determined]
-
-### Data Source Licenses
-- **IOC World Bird List:** CC-BY-4.0 (attribution required)
-  - Citation: Gill F, D Donsker & P Rasmussen (Eds). 2024. IOC World Bird List (vXX.X). doi:10.14344/IOC.ML.XX.X
-- **Wikidata:** CC0 (public domain)
-- **eBird Data:** eBird Basic Dataset Terms of Use
-  - Research use only
-  - Citation required
-  - Cannot redistribute raw EBD data
-  - Derived works (region packs) have different terms
-- **Avilistr/Avibase:** [Check Avibase terms]
-
-### Important
-By using these extractors, you agree to comply with all source data licenses.
-
----
-
-## Support
-
-- **Documentation:** See `docs/` directory
-- **Issues:** https://github.com/[org]/BirdNET-Pi-extractors/issues
-- **BirdNET-Pi Main Repo:** https://github.com/mcguirepr89/BirdNET-Pi
-
----
-
-## Acknowledgments
-
-- **IOC World Bird List** for comprehensive multilingual bird names
-- **Wikidata community** for crowd-sourced translations
-- **Cornell Lab of Ornithology** for eBird data
-- **Avibase** (Denis Lepage) for stable species identifiers and taxonomy mappings
-- **BirdNET-Pi contributors** for the amazing bird detection platform
-
----
-
-**Last Updated:** 2025-10-08
-**Repository Status:** Active Development
+The region packs include proper eBird attribution as required by the license.

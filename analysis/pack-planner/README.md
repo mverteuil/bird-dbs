@@ -1,18 +1,34 @@
 # Pack Planner
 
-Partition eBird region packs into GitHub-release-sized regions that fit within the 2GB limit.
+Partition eBird region packs into optimally-sized regions for distribution.
 
 ## Overview
 
-This tool reads density reports from `ebird-density-analyzer` and partitions individual packs into larger geographic regions optimized for distribution via GitHub releases. It uses a greedy merge algorithm to create the largest possible regions while respecting the 2GB size constraint.
+This tool reads density reports and size manifests to partition packs into geographic
+regions optimized for distribution. It supports two workflows:
 
-## Features
+### Linear Workflow (Recommended)
 
-- **Greedy partitioning**: Merges adjacent H3 cells to maximize region size
-- **Monte Carlo optimization**: Optional randomized search for better partitions
-- **Automatic naming**: Generates human-readable region IDs (e.g., "na-west-coast")
-- **Registry generation**: Creates lookup index for client downloads
-- **Size validation**: Ensures all regions fit within 2GB limit
+Uses estimated sizes from density reports - no initial build required:
+
+1. **Create bootstrap size manifest**: From density report estimates
+2. **Run pack-planner**: Create regions based on estimated sizes
+3. **Build packs**: Single build pass
+4. **(Optional) Refine**: If estimates were off, re-plan with actual sizes
+
+### Legacy Workflow (Two-Pass)
+
+Requires building packs twice to get actual sizes:
+
+1. Initial build → get actual sizes
+2. Re-plan with actual sizes
+3. Final build
+
+## Prerequisites
+
+- Density reports from `convert_discovery_to_density_report.py`
+- Partitioned eBird data from `partition_by_boundary.py`
+- Size manifest (bootstrap from estimates, or measured from actual builds)
 
 ## Installation
 
@@ -21,142 +37,193 @@ cd analysis/pack-planner
 uv sync
 ```
 
-## Usage
+## Linear Workflow (Recommended)
 
-### Basic Usage
+### Step 1: Create Bootstrap Size Manifest
 
-```bash
-uv run pack-planner \
-  --density-reports density_reports/ \
-  --max-size-mb 1950 \
-  --output-manifest pack_manifest.json \
-  --output-registry pack_registry.json
-```
-
-### With Monte Carlo Optimization
+Create size manifest from density report estimates (no builds needed):
 
 ```bash
-uv run pack-planner \
-  --density-reports density_reports/ \
-  --method monte-carlo \
-  --monte-carlo-iterations 100 \
-  --output-manifest pack_manifest.json \
-  --output-registry pack_registry.json
+cd ../scripts
+uv run create_bootstrap_size_manifest.py \
+  --density-report /Volumes/Lightroom/ebird_partitioned/density_report_res4.json \
+  --output /Volumes/Lightroom/ebird_partitioned/size_manifest.json
 ```
 
-### Verbose Logging
+### Step 2: Run Pack Planner
+
+Create regions using estimated sizes:
 
 ```bash
+cd ../analysis/pack-planner
 uv run pack-planner \
-  --density-reports density_reports/ \
-  --output-manifest pack_manifest.json \
-  --output-registry pack_registry.json \
-  --verbose
+  --density-reports /path/to/density_reports/ \
+  --size-manifest /Volumes/Lightroom/ebird_partitioned/size_manifest.json \
+  --max-region-size-mb 250 \
+  --output-manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest.json \
+  --output-registry /Volumes/Lightroom/ebird_partitioned/pack_registry.json
 ```
+
+### Step 3: Build Packs
+
+Build the final packs:
+
+```bash
+cd ../scripts
+uv run build_packs_from_partitions.py \
+  --partitioned-dir /Volumes/Lightroom/ebird_partitioned \
+  --manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest.json \
+  --output-dir /Volumes/Lightroom/region_packs
+```
+
+### Optional: Refinement Pass
+
+If estimated sizes differ significantly from actual builds:
+
+```bash
+# 1. Create accurate size manifest from actual builds
+uv run create_size_manifest.py \
+  --packs-dir /Volumes/Lightroom/region_packs \
+  --pack-manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest.json \
+  --output /Volumes/Lightroom/ebird_partitioned/size_manifest_v2.json
+
+# 2. Re-plan with actual sizes
+cd ../analysis/pack-planner
+uv run pack-planner \
+  --density-reports /path/to/density_reports/ \
+  --size-manifest /Volumes/Lightroom/ebird_partitioned/size_manifest_v2.json \
+  --max-region-size-mb 250 \
+  --output-manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest_v2.json \
+  --output-registry /Volumes/Lightroom/ebird_partitioned/pack_registry_v2.json
+
+# 3. Rebuild with optimized regions
+cd ../scripts
+rm -rf /Volumes/Lightroom/region_packs
+uv run build_packs_from_partitions.py \
+  --partitioned-dir /Volumes/Lightroom/ebird_partitioned \
+  --manifest /Volumes/Lightroom/ebird_partitioned/pack_manifest_v2.json \
+  --output-dir /Volumes/Lightroom/region_packs
+```
+
+## CLI Options
+
+```bash
+uv run pack-planner --help
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--density-reports` | (required) | Directory with density report JSONs |
+| `--size-manifest` | (required) | JSON mapping cells to actual sizes |
+| `--max-region-size-mb` | 250 | Maximum size per region in MB |
+| `--max-pack-size-mb` | 500 | Maximum size per individual pack |
+| `--output-manifest` | (required) | Output path for pack manifest |
+| `--output-registry` | (required) | Output path for region registry |
+| `--method` | continental | Partitioning method |
+| `--verbose` | false | Enable debug logging |
 
 ## Output Files
 
 ### Pack Manifest (pack_manifest.json)
 
-Contains full list of regions with all packs:
+Full region definitions with all packs:
 
 ```json
 {
   "regions": [
     {
-      "region_id": "na-west-coast",
-      "release_name": "na-west-coast-2025.08",
-      "h3_cells": ["8001fffffffffff", "8003fffffffffff"],
-      "packs": [
-        {
-          "pack_id": "h3-r4-599686042433355775-data-r7",
-          "estimated_size_mb": 8.2
-        }
-      ],
-      "size_mb": 1847.3,
-      "pack_count": 245,
-      "center": {"lat": 42.5, "lon": -122.0}
+      "region_id": "western-europe-1",
+      "h3_cells": ["8001fffffffffff", ...],
+      "packs": [...],
+      "size_mb": 245.3,
+      "pack_count": 312,
+      "center": {"lat": 48.5, "lon": 2.3},
+      "m49_region": "western-europe-1"
     }
   ]
 }
 ```
 
-### Pack Registry (pack_registry.json)
+### Size Manifest (size_manifest.json)
 
-Minimal registry for client lookups (~100KB):
+Per-cell size mapping. Can be either:
+- **Bootstrap manifest**: From density report estimates (has `"bootstrap": true`)
+- **Measured manifest**: From actual build sizes (has `"source_region": "region-name"`)
+
+Bootstrap manifest (from `create_bootstrap_size_manifest.py`):
 
 ```json
 {
-  "version": "2025.08",
-  "total_regions": 287,
-  "total_packs": 8547,
-  "total_size_gb": 67.3,
-  "regions": [
+  "version": "1.0",
+  "description": "Bootstrap size manifest from density estimates (not actual builds)",
+  "bootstrap": true,
+  "stats": {
+    "total_cells": 28967,
+    "total_size_mb": 19800.5,
+    "average_size_mb_per_cell": 0.68
+  },
+  "cells": [
     {
-      "region_id": "na-west-coast",
-      "h3_cells": ["8001fffffffffff", "8003fffffffffff"],
-      "resolution": 2,
-      "release_name": "na-west-coast-2025.08",
-      "total_size_mb": 1847.3,
-      "pack_count": 245,
-      "center": {"lat": 42.5, "lon": -122.0},
-      "bbox": {
-        "min_lat": 32.5,
-        "max_lat": 49.0,
-        "min_lon": -125.0,
-        "max_lon": -115.0
-      }
+      "boundary_cell": "842b9bdffffffff",
+      "size_mb": 0.72,
+      "source_region": "bootstrap"
     }
   ]
 }
 ```
 
-## Algorithms
+Measured manifest (from `create_size_manifest.py`):
 
-### Greedy Merge
+```json
+{
+  "version": "1.0",
+  "stats": {
+    "total_cells": 28967,
+    "total_size_mb": 19800.5,
+    "average_size_mb_per_cell": 0.68
+  },
+  "cells": [
+    {
+      "boundary_cell": "842b9bdffffffff",
+      "size_mb": 0.72,
+      "source_region": "north-america-great-lakes"
+    }
+  ]
+}
+```
 
-1. Group packs by H3 res 2 parent cells (~1,900 globally)
-2. Sort regions by size (smallest first)
-3. For each region, find adjacent regions that fit when merged
-4. Merge and repeat until no more merges possible
+## Partitioning Algorithm
 
-**Characteristics:**
-- Deterministic (same input → same output)
-- Fast (~seconds for global dataset)
-- Produces near-optimal results
+The `continental` method (default):
 
-### Monte Carlo
+1. **Geographic grouping**: Assign packs to predefined continental boundaries
+2. **Size-aware splitting**: Split regions exceeding `max-region-size-mb`
+   - Sort packs by latitude for geographic locality
+   - Create sub-regions targeting equal size distribution
+3. **Gap filling**: Add interior cells for continuous coverage
+4. **Border overlap**: Add 1-cell overlap at region boundaries
+5. **Global coverage**: Assign remaining cells to nearest region
 
-1. Run greedy merge with random pack order
-2. Repeat N times with different random orders
-3. Pick partition with fewest regions
+## Size Estimation
 
-**Characteristics:**
-- Randomized (different runs → different results)
-- Slower (~minutes for 100 iterations)
-- Can find better partitions than pure greedy
+The size manifest provides actual MB-per-cell values from real builds. This is critical because:
 
-## Region Naming
+- Multi-resolution data (res 5/4/2) makes packs ~3-5x larger than single-resolution
+- Cell density varies significantly by region (0.45 - 1.56 MB/cell observed)
+- Accurate sizing enables optimal region boundaries
 
-Regions are automatically named based on geographic location:
+## Example: Target 250 MB Regions
 
-**North America:**
-- `na-west-coast` - California, Oregon, Washington, BC
-- `na-east-coast` - New York, Massachusetts, North Carolina
-- `na-midwest` - Illinois, Ohio, Michigan, Indiana
-- `na-southwest` - Arizona, New Mexico, West Texas
-
-**Europe:**
-- `europe-western` - UK, France, Spain, Portugal
-- `europe-central` - Germany, Poland, Czech Republic, Austria
-- `europe-northern` - Sweden, Norway, Finland
-
-See `src/pack_planner/naming.py` for complete mappings.
+With our actual data:
+- Total: 19.3 GB across 28,967 cells
+- Average: 0.68 MB per cell
+- For 250 MB target: ~370 cells per region
+- Expected: ~80-90 regions globally
 
 ## Dependencies
 
 - `click`: CLI framework
-- `h3`: H3 hexagonal indexing (Python bindings)
+- `h3`: H3 hexagonal indexing
 - `pyyaml`: YAML config parsing
 
 ## Testing
@@ -164,15 +231,3 @@ See `src/pack_planner/naming.py` for complete mappings.
 ```bash
 uv run pytest
 ```
-
-## Performance
-
-- **Input**: ~10,000 packs from density analysis
-- **Greedy method**: ~5-10 seconds
-- **Monte Carlo (100 iter)**: ~2-3 minutes
-- **Memory usage**: <1 GB
-
-## See Also
-
-- [ebird-density-analyzer](../ebird-density-analyzer/) - Previous step: analyze density
-- [ebird-region-pack-strategy.md](../../docs/ebird-region-pack-strategy.md) - Full design doc

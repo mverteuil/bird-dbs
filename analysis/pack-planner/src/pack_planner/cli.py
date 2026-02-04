@@ -21,10 +21,16 @@ logger = logging.getLogger(__name__)
     help="Directory containing density report JSON files from ebird-density-analyzer",
 )
 @click.option(
+    "--size-manifest",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON file mapping boundary cells to actual sizes (from create_size_manifest.py)",
+)
+@click.option(
     "--max-region-size-mb",
     type=float,
-    default=1950.0,
-    help="Maximum size per region bundle in MB (default: 1950 = 2GB - 50MB buffer)",
+    default=250.0,
+    help="Maximum size per region bundle in MB (default: 250 for practical downloads)",
 )
 @click.option(
     "--max-pack-size-mb",
@@ -69,6 +75,7 @@ logger = logging.getLogger(__name__)
 )
 def main(
     density_reports: Path,
+    size_manifest: Path,
     max_region_size_mb: float,
     max_pack_size_mb: float,
     output_manifest: Path,
@@ -108,11 +115,26 @@ def main(
         len(pack_manifest["packs"]),
     )
 
+    # Load size manifest
+    logger.info("Loading size manifest from: %s", size_manifest)
+    with open(size_manifest) as f:
+        size_data = json.load(f)
+
+    # Convert to cell -> size_mb mapping
+    cell_sizes = {
+        cell["boundary_cell"]: cell["size_mb"]
+        for cell in size_data.get("cells", [])
+    }
+    logger.info("Loaded sizes for %d boundary cells", len(cell_sizes))
+
     # Partition into regions
     logger.info("Partitioning packs into regions using %s method...", method)
+    logger.info("Max region size: %.0f MB", max_region_size_mb)
 
     partitioner = RegionPartitioner(
-        max_size_mb=max_region_size_mb, min_checklists=min_checklists_per_region
+        max_size_mb=max_region_size_mb,
+        min_checklists=min_checklists_per_region,
+        size_manifest=cell_sizes,
     )
 
     if method == "greedy":

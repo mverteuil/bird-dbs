@@ -138,16 +138,42 @@ CONTINENTAL_BOUNDARIES = {
 class RegionPartitioner:
     """Partition packs into regions that fit within size constraints."""
 
-    def __init__(self, max_size_mb: float = 1950.0, min_checklists: int = 6000000):
+    def __init__(
+        self,
+        max_size_mb: float = 250.0,
+        min_checklists: int = 6000000,
+        size_manifest: dict = None,
+    ):
         """
         Initialize partitioner.
 
         Args:
-            max_size_mb: Maximum size per region in MB (default: 1950 = 2GB - 50MB buffer)
+            max_size_mb: Maximum size per region in MB (default: 250 for practical downloads)
             min_checklists: Minimum checklists per region (default: 6M for ~60 regions globally)
+            size_manifest: Dict mapping boundary_cell -> size_mb from actual builds (required)
         """
+        if size_manifest is None:
+            raise ValueError(
+                "size_manifest is required. Run build_packs_from_partitions.py first "
+                "to generate actual size data, then create size manifest with "
+                "scripts/create_size_manifest.py"
+            )
         self.max_size_mb = max_size_mb
         self.min_checklists = min_checklists
+        self.size_manifest = size_manifest
+
+    def _get_pack_size(self, pack: dict) -> float:
+        """Get size for a pack from the size manifest."""
+        cell = pack.get("boundary_cell")
+        if cell and cell in self.size_manifest:
+            return self.size_manifest[cell]
+        # Fallback for cells not in manifest (shouldn't happen with proper workflow)
+        logger.warning("Cell %s not in size manifest, using default 0.5 MB", cell)
+        return 0.5
+
+    def _get_region_size(self, region: dict) -> float:
+        """Calculate total size of a region from its packs."""
+        return sum(self._get_pack_size(p) for p in region.get("packs", []))
 
     def partition_greedy(self, packs: list[dict]) -> list[dict]:
         """
@@ -286,7 +312,7 @@ class RegionPartitioner:
             region = {
                 "h3_cells": h3_cells,
                 "packs": region_packs,
-                "size_mb": -1,  # Placeholder - actual size set by ebird-builder
+                "size_mb": self._get_region_size({"packs": region_packs}),
                 "pack_count": len(region_packs),
                 "center": {"lat": center_lat, "lon": center_lon},
                 "m49_region": region_name,
@@ -296,13 +322,16 @@ class RegionPartitioner:
 
         logger.info("Created %d region packs from custom boundaries", len(all_regions))
 
-        # Step 3: Fill interior gaps
+        # Step 3: Split oversized regions based on actual size data
+        all_regions = self._split_oversized_regions(all_regions)
+
+        # Step 4: Fill interior gaps
         all_regions = self._fill_interior_gaps(all_regions)
 
-        # Step 4: Add border overlap
+        # Step 5: Add border overlap
         all_regions = self._add_border_overlap(all_regions)
 
-        # Step 5: Global coverage (assign remaining cells)
+        # Step 6: Global coverage (assign remaining cells)
         all_regions = self._ensure_global_coverage(all_regions)
 
         logger.info("Final: %d region packs with continuous coverage and overlap", len(all_regions))
@@ -473,6 +502,95 @@ class RegionPartitioner:
 
         logger.info("Density-based merges: %d", merge_count)
         return regions
+
+    def _split_oversized_regions(self, regions: list[dict]) -> list[dict]:
+        """
+        Split regions that exceed max_size_mb into smaller sub-regions.
+
+        Uses geographic clustering (latitude bands) to split large regions
+        while maintaining spatial locality.
+        """
+        logger.info(
+            "Splitting oversized regions (max %.0f MB)...", self.max_size_mb
+        )
+
+        result = []
+        split_count = 0
+
+        for region in regions:
+            region_size = self._get_region_size(region)
+            region_name = region.get("m49_region", "unknown")
+
+            if region_size <= self.max_size_mb:
+                # Region fits, keep as-is
+                region["size_mb"] = region_size
+                result.append(region)
+                continue
+
+            # Need to split this region
+            num_splits = max(2, int(region_size / self.max_size_mb) + 1)
+            logger.info(
+                "Splitting %s (%.0f MB) into %d sub-regions",
+                region_name, region_size, num_splits
+            )
+
+            # Sort packs by latitude for geographic clustering
+            packs = sorted(region["packs"], key=lambda p: p["center_lat"])
+
+            # Split into roughly equal-sized chunks by accumulated size
+            target_size = region_size / num_splits
+            sub_regions = []
+            current_packs = []
+            current_size = 0
+            sub_index = 1
+
+            for pack in packs:
+                pack_size = self._get_pack_size(pack)
+                current_packs.append(pack)
+                current_size += pack_size
+
+                # Start new sub-region when we exceed target (except for last)
+                if current_size >= target_size and len(sub_regions) < num_splits - 1:
+                    sub_region = self._create_sub_region(
+                        current_packs, region_name, sub_index
+                    )
+                    sub_regions.append(sub_region)
+                    sub_index += 1
+                    current_packs = []
+                    current_size = 0
+
+            # Add remaining packs to final sub-region
+            if current_packs:
+                sub_region = self._create_sub_region(
+                    current_packs, region_name, sub_index
+                )
+                sub_regions.append(sub_region)
+
+            result.extend(sub_regions)
+            split_count += len(sub_regions) - 1
+
+        logger.info(
+            "Split %d regions, total now: %d", split_count, len(result)
+        )
+        return result
+
+    def _create_sub_region(
+        self, packs: list[dict], parent_name: str, index: int
+    ) -> dict:
+        """Create a sub-region from a list of packs."""
+        center_lat = sum(p["center_lat"] for p in packs) / len(packs)
+        center_lon = sum(p["center_lon"] for p in packs) / len(packs)
+        h3_cells = [p["boundary_cell"] for p in packs]
+        size_mb = sum(self._get_pack_size(p) for p in packs)
+
+        return {
+            "h3_cells": h3_cells,
+            "packs": packs,
+            "size_mb": size_mb,
+            "pack_count": len(packs),
+            "center": {"lat": center_lat, "lon": center_lon},
+            "m49_region": f"{parent_name}-{index}",
+        }
 
     def _fill_interior_gaps(self, regions: list[dict]) -> list[dict]:
         """
