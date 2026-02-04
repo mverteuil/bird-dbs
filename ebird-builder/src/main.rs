@@ -14,18 +14,19 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use config::{PackManifest, PackRegistry};
+use config::{FilterConfig, PackManifest, PackRegistry};
+use ebird::parquet_reader::ParquetBatchIterator;
 use ebird::EBirdRecord;
-use h3::H3Aggregator;
+use h3::{GridCellPack, StreamingH3Aggregator};
 use h3o::CellIndex;
 
 #[derive(Parser)]
 #[command(name = "birdnetpi-ebird-pack")]
 #[command(about = "Generate H3 grid region packs from eBird data for BirdNET-Pi")]
 struct Cli {
-    /// Input tarball (eBird data)
+    /// Input: tarball (.tar), gzipped file (.gz), plain text (.txt), or directory with Parquet files
     #[arg(short, long)]
     input: PathBuf,
 
@@ -62,14 +63,15 @@ struct Cli {
     taxon_registry: PathBuf,
 }
 
-/// Metadata for a region's aggregator
+/// Metadata for a region's streaming aggregator
 struct RegionAggregator {
     region_id: String,
     release_name: String,
     h3_resolution: u8,
     boundary_cells: HashSet<CellIndex>,
     boundary_resolution: h3o::Resolution,
-    aggregator: H3Aggregator,
+    aggregator: StreamingH3Aggregator,
+    completed_cells: Vec<GridCellPack>,  // Collect cells as they complete
     total_checklists: HashSet<String>,
     total_observations: usize,
 }
@@ -81,11 +83,22 @@ fn main() -> Result<()> {
 
     // Load taxon registry
     info!("Loading taxon registry from {:?}", cli.taxon_registry);
-    let registry = taxon_registry::TaxonRegistry::load_from_file(&cli.taxon_registry)?;
+    let registry = Arc::new(taxon_registry::TaxonRegistry::load_from_file(&cli.taxon_registry)?);
     info!(
         "  ✓ Loaded registry: {} species from release {}",
         registry.species_count, registry.ebird_release
     );
+
+    // Define filter configuration for streaming aggregators
+    let filter_config = FilterConfig {
+        approved_only: true,
+        complete_checklists_only: true,
+        native_species_only: true,
+        min_observations: 5,
+        min_checklists: 3,
+        min_yearly_frequency: 0.01,
+        deduplication: config::DeduplicationMode::GroupIdentifier,
+    };
 
     // Load pack manifest
     info!("Loading pack manifest from {:?}", cli.manifest);
@@ -167,12 +180,13 @@ fn main() -> Result<()> {
             HashMap::new()
         };
 
-        // Create H3 aggregator with sampling data
-        let aggregator = if sampling_data.is_empty() {
-            H3Aggregator::new(h3_resolution)?
-        } else {
-            H3Aggregator::new_with_sampling(h3_resolution, sampling_data)?
-        };
+        // Create streaming H3 aggregator with filters, registry, and sampling data
+        let aggregator = StreamingH3Aggregator::new(
+            h3_resolution,
+            filter_config.clone(),
+            Arc::clone(&registry),
+            sampling_data,
+        )?;
 
         region_aggregators.push(RegionAggregator {
             region_id: region.region_id.clone(),
@@ -181,6 +195,7 @@ fn main() -> Result<()> {
             boundary_cells,
             boundary_resolution,
             aggregator,
+            completed_cells: Vec::new(),  // Initialize empty cell collection
             total_checklists: HashSet::new(),
             total_observations: 0,
         });
@@ -197,214 +212,142 @@ fn main() -> Result<()> {
     info!("  Estimated memory usage: ~{} MB", region_aggregators.len() * 150);
 
     // ========================================================================
-    // PHASE 2: Single pass through dataset - route to all matching aggregators
+    // PHASE 2: Streaming pass through SORTED Parquet dataset
     // ========================================================================
-    info!("\n=== Phase 2: Single-pass dataset processing ===");
-    info!("Opening tarball: {:?}", cli.input);
+    info!("\n=== Phase 2: Streaming sorted Parquet processing ===");
+    info!("Opening sorted Parquet directory: {:?}", cli.input);
 
-    let file = File::open(&cli.input)?;
-    let mut tar = tar::Archive::new(file);
-
-    // Find .gz entry
-    info!("Extracting from tarball...");
-    let mut found_entry = None;
-    for entry in tar.entries()? {
-        let entry = entry?;
-        let path = entry.path()?;
-        if path.extension().and_then(|s| s.to_str()) == Some("gz") {
-            info!("  Found: {}", path.display());
-            found_entry = Some(entry);
-            break;
-        }
+    // REQUIRE sorted Parquet input for streaming aggregation
+    if !cli.input.is_dir() {
+        return Err(anyhow::anyhow!(
+            "Streaming aggregation requires a directory of sorted Parquet files. Got: {:?}",
+            cli.input
+        ));
     }
 
-    let entry = found_entry.ok_or_else(|| anyhow::anyhow!("No .gz file found in tarball"))?;
+    // Create Parquet batch iterator from sorted directory
+    let batch_iterator = ParquetBatchIterator::from_directory(&cli.input, 10_000)?;
 
-    info!("Decompressing gzip and parsing CSV with parallel processing...");
+    // Sequential streaming processing
+    let mut record_count = 0u64;
+    let mut filtered_count = 0u64;
+    let mut routed_count = 0u64;
+    let mut last_report = std::time::Instant::now();
 
-    let gz_decoder = flate2::read::GzDecoder::new(entry);
-    let mut rdr = csv::ReaderBuilder::new()
-        .delimiter(b'\t')
-        .from_reader(gz_decoder);
+    info!("Processing records sequentially in sorted order...");
+    info!("CRITICAL: Data must be sorted by (LAT, LON, GROUP, SAMPLING, TAXON, DATE)");
 
-    // Wrap aggregators in Arc<Mutex<>> for thread safety
-    let shared_aggregators: Vec<Arc<Mutex<RegionAggregator>>> = region_aggregators
-        .into_iter()
-        .map(|agg| Arc::new(Mutex::new(agg)))
-        .collect();
+    for batch_result in batch_iterator {
+        let batch = batch_result?;
 
-    // Wrap registry in Arc for thread-safe read-only access
-    let shared_registry = Arc::new(registry);
+        for record in batch {
+            record_count += 1;
 
-    // Shared counters
-    let record_count = Arc::new(Mutex::new(0u64));
-    let filtered_count = Arc::new(Mutex::new(0u64));
-    let routed_count = Arc::new(Mutex::new(0u64));
-    let last_report = Arc::new(Mutex::new(std::time::Instant::now()));
-
-    // Create channel for batched records
-    let (tx, rx) = crossbeam_channel::bounded::<Vec<EBirdRecord>>(100);
-
-    // Clone references for the processing thread and finalization
-    let proc_aggregators = shared_aggregators.clone();
-    let proc_registry = shared_registry.clone();
-    let finalize_registry = shared_registry.clone();
-    let proc_record_count = record_count.clone();
-    let proc_filtered_count = filtered_count.clone();
-    let proc_routed_count = routed_count.clone();
-    let proc_last_report = last_report.clone();
-
-    // Spawn processing thread pool
-    let processor_handle = std::thread::spawn(move || {
-        use rayon::prelude::*;
-
-        rx.into_iter().par_bridge().for_each(|batch| {
-            let batch_size = batch.len();
-            let mut batch_filtered = 0;
-            let mut batch_routed = 0;
-
-            for record in batch {
-                // Apply ONLY critical filters - quality is tracked per-observation
-                // Date filter
-                let date = match record.parse_date() {
-                    Ok(d) => d,
-                    Err(_) => {
-                        batch_filtered += 1;
-                        continue;
-                    }
-                };
-
-                if date < date_start || date > date_end {
-                    batch_filtered += 1;
+            // Apply date filter
+            let date = match record.parse_date() {
+                Ok(d) => d,
+                Err(_) => {
+                    filtered_count += 1;
                     continue;
                 }
+            };
 
-                // Convert observation to H3 coordinates once
-                let obs_latlng = match h3o::LatLng::new(record.latitude, record.longitude) {
-                    Ok(ll) => ll,
-                    Err(_) => {
-                        batch_filtered += 1;
-                        continue;
-                    }
-                };
+            if date < date_start || date > date_end {
+                filtered_count += 1;
+                continue;
+            }
 
-                // Look up canonical taxon ID from global registry
-                let normalized_name = taxon_registry::normalize_species_name(&record.scientific_name);
-                let canonical_taxon_id = proc_registry
-                    .get_canonical_id(&normalized_name)
-                    .unwrap_or(&record.taxon_concept_id);  // Fallback to record's ID if not in registry
+            // Convert observation to H3 coordinates
+            let obs_latlng = match h3o::LatLng::new(record.latitude, record.longitude) {
+                Ok(ll) => ll,
+                Err(_) => {
+                    filtered_count += 1;
+                    continue;
+                }
+            };
 
-                // Route to ALL matching region aggregators
-                for shared_agg in &proc_aggregators {
-                    let mut agg = shared_agg.lock().unwrap();
-                    let obs_boundary_cell = obs_latlng.to_cell(agg.boundary_resolution);
+            // Route to ALL matching region aggregators
+            for region_agg in &mut region_aggregators {
+                let obs_boundary_cell = obs_latlng.to_cell(region_agg.boundary_resolution);
 
-                    if agg.boundary_cells.contains(&obs_boundary_cell) {
-                        // Track totals
-                        agg.total_checklists.insert(record.get_checklist_id());
-                        agg.total_observations += 1;
+                if region_agg.boundary_cells.contains(&obs_boundary_cell) {
+                    // Track totals
+                    region_agg.total_checklists.insert(record.get_checklist_id());
+                    region_agg.total_observations += 1;
 
-                        // Add to aggregator with canonical taxon ID
-                        if let Err(e) = agg.aggregator.add_record(&record, canonical_taxon_id) {
-                            log::error!("Error adding record: {}", e);
+                    // Process record with streaming aggregator
+                    // Returns Some(GridCellPack) if a cell was completed
+                    match region_agg.aggregator.process_record(&record) {
+                        Ok(Some(completed_cell)) => {
+                            // Cell completed - add to collection
+                            region_agg.completed_cells.push(completed_cell);
                         }
-                        batch_routed += 1;
+                        Ok(None) => {
+                            // Record added to current cell, no cell completed yet
+                        }
+                        Err(e) => {
+                            log::error!("Error processing record: {}", e);
+                        }
                     }
+
+                    routed_count += 1;
                 }
             }
 
-            // Update shared counters
-            {
-                let mut count = proc_record_count.lock().unwrap();
-                *count += batch_size as u64;
-                let current_count = *count;
-
-                let mut filtered = proc_filtered_count.lock().unwrap();
-                *filtered += batch_filtered;
-
-                let mut routed = proc_routed_count.lock().unwrap();
-                *routed += batch_routed;
-                let current_routed = *routed;
-
-                // Progress reporting
-                if current_count % 1_000_000 < batch_size as u64 {
-                    let mut last_rep = proc_last_report.lock().unwrap();
-                    let elapsed = last_rep.elapsed().as_secs_f64();
-                    let rate = 1_000_000.0 / elapsed;
-                    info!(
-                        "  Processed {} records ({:.0} rec/sec, {} routed)",
-                        current_count, rate, current_routed
-                    );
-                    *last_rep = std::time::Instant::now();
-                }
+            // Progress reporting
+            if record_count % 1_000_000 == 0 {
+                let elapsed = last_report.elapsed().as_secs_f64();
+                let rate = 1_000_000.0 / elapsed;
+                info!(
+                    "  Processed {} records ({:.0} rec/sec, {} routed)",
+                    record_count, rate, routed_count
+                );
+                last_report = std::time::Instant::now();
             }
-        });
-    });
-
-    // Read and send batches from main thread
-    let mut batch = Vec::with_capacity(10_000);
-
-    for result in rdr.deserialize() {
-        let record: EBirdRecord = result?;
-        batch.push(record);
-
-        if batch.len() >= 10_000 {
-            if tx.send(batch.clone()).is_err() {
-                break;  // Receiver dropped
-            }
-            batch.clear();
         }
     }
-
-    // Send final partial batch
-    if !batch.is_empty() {
-        let _ = tx.send(batch);
-    }
-
-    // Drop sender to signal end
-    drop(tx);
-
-    // Wait for processing to complete
-    processor_handle.join().expect("Processor thread panicked");
-
-    // Extract final counts
-    let final_record_count = *record_count.lock().unwrap();
-    let final_filtered_count = *filtered_count.lock().unwrap();
-    let final_routed_count = *routed_count.lock().unwrap();
-
-    // Unwrap aggregators from Arc<Mutex<>>
-    let region_aggregators: Vec<RegionAggregator> = shared_aggregators
-        .into_iter()
-        .map(|arc| {
-            Arc::try_unwrap(arc)
-                .ok()
-                .expect("Failed to unwrap Arc - still has multiple references")
-                .into_inner()
-                .expect("Failed to unwrap Mutex - poisoned")
-        })
-        .collect();
 
     info!("\n✓ Dataset pass complete!");
     info!(
         "  Total records: {} ({} filtered out)",
-        final_record_count, final_filtered_count
+        record_count, filtered_count
     );
-    info!("  Total observations routed: {}", final_routed_count);
+    info!("  Total observations routed: {}", routed_count);
+
+    // Finalize all streaming aggregators to get final cells
+    info!("\nFinalizing streaming aggregators...");
+    for region_agg in &mut region_aggregators {
+        let aggregator = std::mem::replace(
+            &mut region_agg.aggregator,
+            StreamingH3Aggregator::new(region_agg.h3_resolution, filter_config.clone(), Arc::clone(&registry), HashMap::new())?
+        );
+
+        match aggregator.finish() {
+            Ok(Some(final_cell)) => {
+                region_agg.completed_cells.push(final_cell);
+                info!(
+                    "  ✓ Region {}: {} cells total",
+                    region_agg.region_id,
+                    region_agg.completed_cells.len()
+                );
+            }
+            Ok(None) => {
+                info!(
+                    "  ✓ Region {}: {} cells (no final cell)",
+                    region_agg.region_id,
+                    region_agg.completed_cells.len()
+                );
+            }
+            Err(e) => {
+                log::error!("Error finalizing region {}: {}", region_agg.region_id, e);
+            }
+        }
+    }
 
     // ========================================================================
-    // PHASE 3: Finalize and write all region databases
+    // PHASE 3: Write all region databases
     // ========================================================================
-    info!("\n=== Phase 3: Finalizing and writing region databases ===");
-
-    let default_filters = config::FilterConfig {
-        approved_only: true,
-        complete_checklists_only: true,
-        native_species_only: true,
-        min_observations: 5,
-        min_checklists: 3,
-        min_yearly_frequency: 0.01,
-        deduplication: config::DeduplicationMode::GroupIdentifier,
-    };
+    info!("\n=== Phase 3: Writing region databases ===");
 
     // Track actual file sizes for manifest update
     let mut region_sizes: HashMap<String, f64> = HashMap::new();
@@ -423,12 +366,12 @@ fn main() -> Result<()> {
             region_agg.total_checklists.len()
         );
 
-        // Finalize aggregation with global registry
-        let grid_cells = region_agg.aggregator.finalize(&default_filters, &finalize_registry);
+        // Use the completed cells that were collected during streaming
+        let grid_cells = region_agg.completed_cells;
 
         let total_species: usize = grid_cells.iter().map(|c| c.species.len()).sum();
         info!(
-            "  Generated {} hexagons with {} species records",
+            "  {} hexagons with {} species records (from streaming)",
             grid_cells.len(),
             total_species
         );
@@ -449,7 +392,7 @@ fn main() -> Result<()> {
                 start: date_start,
                 end: date_end,
             },
-            filters: default_filters.clone(),
+            filters: filter_config.clone(),
         };
 
         // Write to database (gzipped)

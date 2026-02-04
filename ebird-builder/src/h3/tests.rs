@@ -135,7 +135,7 @@ mod tests {
 
         // But 2 checklists
         let cell_data = aggregator.cells.values().next().unwrap();
-        assert_eq!(cell_data.total_checklists.len(), 2);
+        assert_eq!(cell_data.total_checklists, 2);
     }
 
     #[test]
@@ -170,8 +170,8 @@ mod tests {
         let result = cell_data.add_observation(&record, &record.taxon_concept_id);
         assert!(result.is_ok());
 
-        assert_eq!(cell_data.total_checklists.len(), 1);
-        assert_eq!(cell_data.complete_checklists.len(), 1);
+        assert_eq!(cell_data.total_checklists, 1);
+        assert_eq!(cell_data.complete_checklists, 1);
         assert_eq!(cell_data.species.len(), 1);
     }
 
@@ -262,39 +262,22 @@ mod tests {
 
     #[test]
     fn test_compute_monthly_data() {
-        use std::collections::HashSet;
-
         // Create monthly observation counts array
         let mut monthly_obs = [0u32; 12];
         monthly_obs[0] = 2;  // January (index 0 = month 1): 2 observations
         monthly_obs[5] = 1;  // June (index 5 = month 6): 1 observation
 
-        // Create monthly checklist sets array
-        let monthly_checklists = [
-            {
-                let mut set = HashSet::new();
-                set.insert("S1".to_string());
-                set.insert("S2".to_string());
-                set
-            }, // January: 2 checklists
-            HashSet::new(),
-            HashSet::new(),
-            HashSet::new(),
-            HashSet::new(),
-            {
-                let mut set = HashSet::new();
-                set.insert("S3".to_string());
-                set
-            }, // June: 1 checklist
-            HashSet::new(),
-            HashSet::new(),
-            HashSet::new(),
-            HashSet::new(),
-            HashSet::new(),
-            HashSet::new(),
-        ];
+        // Create monthly checklist counters array (species-specific checklists)
+        let mut monthly_checklists = [0u32; 12];
+        monthly_checklists[0] = 2;  // January: 2 checklists with species
+        monthly_checklists[5] = 1;  // June: 1 checklist with species
 
-        let monthly_data = compute_monthly_data_from_aggregates(&monthly_obs, &monthly_checklists, 10.0);
+        // Create monthly complete checklists array (all checklists in cell)
+        let mut monthly_complete = [0u32; 12];
+        monthly_complete[0] = 3;  // January: 3 total complete checklists in cell
+        monthly_complete[5] = 3;  // June: 3 total complete checklists in cell
+
+        let monthly_data = compute_monthly_data_from_aggregates(&monthly_obs, &monthly_checklists, &monthly_complete);
 
         // Function filters out months with zero observations, so we only get 2 months
         assert_eq!(monthly_data.len(), 2);
@@ -319,30 +302,25 @@ mod tests {
 
     #[test]
     fn test_compute_weekly_data() {
-        use std::collections::HashSet;
-
         // Create weekly observation counts array (48 weeks)
         let mut weekly_obs = [0u32; 48];
         weekly_obs[0] = 3;   // Week 1 (Jan 1-7): 3 observations
         weekly_obs[25] = 2;  // Week 26 (around Jun 27): 2 observations
         weekly_obs[47] = 1;  // Week 48 (Dec 25-31): 1 observation
 
-        // Create weekly checklist sets array
-        let mut weekly_checklists: [HashSet<String>; 48] = std::array::from_fn(|_| HashSet::new());
+        // Create weekly checklist counters array (species-specific)
+        let mut weekly_checklists = [0u32; 48];
+        weekly_checklists[0] = 3;   // Week 1: 3 checklists with species
+        weekly_checklists[25] = 2;  // Week 26: 2 checklists with species
+        weekly_checklists[47] = 1;  // Week 48: 1 checklist with species
 
-        // Week 1: 3 checklists
-        weekly_checklists[0].insert("S1".to_string());
-        weekly_checklists[0].insert("S2".to_string());
-        weekly_checklists[0].insert("S3".to_string());
+        // Create weekly complete checklists array (all checklists in cell)
+        let mut weekly_complete = [0u32; 48];
+        weekly_complete[0] = 6;   // Week 1: 6 total complete checklists
+        weekly_complete[25] = 6;  // Week 26: 6 total complete checklists
+        weekly_complete[47] = 6;  // Week 48: 6 total complete checklists
 
-        // Week 26: 2 checklists
-        weekly_checklists[25].insert("S4".to_string());
-        weekly_checklists[25].insert("S5".to_string());
-
-        // Week 48: 1 checklist
-        weekly_checklists[47].insert("S6".to_string());
-
-        let weekly_data = compute_weekly_data_from_aggregates(&weekly_obs, &weekly_checklists, 10.0);
+        let weekly_data = compute_weekly_data_from_aggregates(&weekly_obs, &weekly_checklists, &weekly_complete);
 
         // Function filters out weeks with zero observations, so we get 3 weeks
         assert_eq!(weekly_data.len(), 3);
@@ -374,23 +352,24 @@ mod tests {
 
     #[test]
     fn test_compute_weekly_data_edge_cases() {
-        use std::collections::HashSet;
-
         // Test empty data
         let weekly_obs = [0u32; 48];
-        let weekly_checklists: [HashSet<String>; 48] = std::array::from_fn(|_| HashSet::new());
-        let weekly_data = compute_weekly_data_from_aggregates(&weekly_obs, &weekly_checklists, 0.0);
+        let weekly_checklists = [0u32; 48];
+        let weekly_complete = [0u32; 48];
+        let weekly_data = compute_weekly_data_from_aggregates(&weekly_obs, &weekly_checklists, &weekly_complete);
         assert_eq!(weekly_data.len(), 0);
 
         // Test single week with data
         let mut weekly_obs = [0u32; 48];
         weekly_obs[23] = 5;  // Week 24 (around Jun 13)
 
-        let mut weekly_checklists: [HashSet<String>; 48] = std::array::from_fn(|_| HashSet::new());
-        weekly_checklists[23].insert("S1".to_string());
-        weekly_checklists[23].insert("S2".to_string());
+        let mut weekly_checklists = [0u32; 48];
+        weekly_checklists[23] = 2;  // 2 checklists with species
 
-        let weekly_data = compute_weekly_data_from_aggregates(&weekly_obs, &weekly_checklists, 5.0);
+        let mut weekly_complete = [0u32; 48];
+        weekly_complete[23] = 2;  // 2 total complete checklists
+
+        let weekly_data = compute_weekly_data_from_aggregates(&weekly_obs, &weekly_checklists, &weekly_complete);
         assert_eq!(weekly_data.len(), 1);
 
         let week24 = &weekly_data[0];
@@ -403,22 +382,20 @@ mod tests {
 
     #[test]
     fn test_compute_weekly_data_frequency_normalization() {
-        use std::collections::HashSet;
-
         // Test that frequency stays within [0.0, 1.0] range
         // This is critical for database CHECK constraints
         let mut weekly_obs = [0u32; 48];
-        let mut weekly_checklists: [HashSet<String>; 48] = std::array::from_fn(|_| HashSet::new());
+        let mut weekly_checklists = [0u32; 48];
+        let mut weekly_complete = [0u32; 48];
 
         // Add observations across multiple weeks
         for week in 0..48 {
             weekly_obs[week] = (week + 1) as u32;  // Varying observation counts
-            for i in 0..((week % 5) + 1) {  // Varying checklist counts
-                weekly_checklists[week].insert(format!("S{}-{}", week, i));
-            }
+            weekly_checklists[week] = ((week % 5) + 1) as u32;  // Varying checklist counts (1-5)
+            weekly_complete[week] = 10;  // 10 complete checklists per week
         }
 
-        let weekly_data = compute_weekly_data_from_aggregates(&weekly_obs, &weekly_checklists, 100.0);
+        let weekly_data = compute_weekly_data_from_aggregates(&weekly_obs, &weekly_checklists, &weekly_complete);
 
         // Verify all frequencies are in valid range
         for week_data in weekly_data.iter() {
@@ -436,28 +413,24 @@ mod tests {
 
     #[test]
     fn test_compute_quarterly_data() {
-        use std::collections::HashSet;
 
         // Create quarterly observation counts array (4 quarters)
         let mut quarterly_obs = [0u32; 4];
         quarterly_obs[0] = 5;  // Q1 (Jan-Mar): 5 observations
         quarterly_obs[2] = 3;  // Q3 (Jul-Sep): 3 observations
 
-        // Create quarterly checklist sets array
-        let mut quarterly_checklists: [HashSet<String>; 4] =
-            std::array::from_fn(|_| HashSet::new());
+        // Create quarterly checklist counters array (species-specific)
+        let mut quarterly_checklists = [0u32; 4];
+        quarterly_checklists[0] = 3;  // Q1: 3 checklists with species
+        quarterly_checklists[2] = 2;  // Q3: 2 checklists with species
 
-        // Q1: 3 checklists
-        quarterly_checklists[0].insert("S1".to_string());
-        quarterly_checklists[0].insert("S2".to_string());
-        quarterly_checklists[0].insert("S3".to_string());
-
-        // Q3: 2 checklists
-        quarterly_checklists[2].insert("S4".to_string());
-        quarterly_checklists[2].insert("S5".to_string());
+        // Create quarterly complete checklists array (all checklists in cell)
+        let mut quarterly_complete = [0u32; 4];
+        quarterly_complete[0] = 5;  // Q1: 5 total complete checklists
+        quarterly_complete[2] = 5;  // Q3: 5 total complete checklists
 
         let quarterly_data =
-            compute_quarterly_data_from_aggregates(&quarterly_obs, &quarterly_checklists, 10.0);
+            compute_quarterly_data_from_aggregates(&quarterly_obs, &quarterly_checklists, &quarterly_complete);
 
         // Function filters out quarters with zero observations, so we get 2 quarters
         assert_eq!(quarterly_data.len(), 2);
@@ -483,28 +456,26 @@ mod tests {
 
     #[test]
     fn test_compute_quarterly_data_edge_cases() {
-        use std::collections::HashSet;
-
         // Test empty data
         let quarterly_obs = [0u32; 4];
-        let quarterly_checklists: [HashSet<String>; 4] =
-            std::array::from_fn(|_| HashSet::new());
+        let quarterly_checklists = [0u32; 4];
+        let quarterly_complete = [0u32; 4];
         let quarterly_data =
-            compute_quarterly_data_from_aggregates(&quarterly_obs, &quarterly_checklists, 0.0);
+            compute_quarterly_data_from_aggregates(&quarterly_obs, &quarterly_checklists, &quarterly_complete);
         assert_eq!(quarterly_data.len(), 0);
 
         // Test single quarter with data
         let mut quarterly_obs = [0u32; 4];
         quarterly_obs[1] = 10; // Q2
 
-        let mut quarterly_checklists: [HashSet<String>; 4] =
-            std::array::from_fn(|_| HashSet::new());
-        quarterly_checklists[1].insert("S1".to_string());
-        quarterly_checklists[1].insert("S2".to_string());
-        quarterly_checklists[1].insert("S3".to_string());
+        let mut quarterly_checklists = [0u32; 4];
+        quarterly_checklists[1] = 3;  // Q2: 3 checklists with species
+
+        let mut quarterly_complete = [0u32; 4];
+        quarterly_complete[1] = 3;  // Q2: 3 total complete checklists
 
         let quarterly_data =
-            compute_quarterly_data_from_aggregates(&quarterly_obs, &quarterly_checklists, 5.0);
+            compute_quarterly_data_from_aggregates(&quarterly_obs, &quarterly_checklists, &quarterly_complete);
         assert_eq!(quarterly_data.len(), 1);
 
         let q2 = &quarterly_data[0];
@@ -517,23 +488,21 @@ mod tests {
 
     #[test]
     fn test_compute_quarterly_data_frequency_normalization() {
-        use std::collections::HashSet;
 
         // Test that frequency stays within [0.0, 1.0] range
         let mut quarterly_obs = [0u32; 4];
-        let mut quarterly_checklists: [HashSet<String>; 4] =
-            std::array::from_fn(|_| HashSet::new());
+        let mut quarterly_checklists = [0u32; 4];
+        let mut quarterly_complete = [0u32; 4];
 
         // Add varying observations and checklists across all quarters
         for quarter in 0..4 {
             quarterly_obs[quarter] = ((quarter + 1) * 10) as u32;
-            for i in 0..((quarter % 3) + 1) {
-                quarterly_checklists[quarter].insert(format!("S{}-{}", quarter, i));
-            }
+            quarterly_checklists[quarter] = ((quarter % 3) + 1) as u32;  // Varying checklist counts (1-3)
+            quarterly_complete[quarter] = 10;  // 10 complete checklists per quarter
         }
 
         let quarterly_data =
-            compute_quarterly_data_from_aggregates(&quarterly_obs, &quarterly_checklists, 100.0);
+            compute_quarterly_data_from_aggregates(&quarterly_obs, &quarterly_checklists, &quarterly_complete);
 
         // Verify all frequencies are in valid range
         for quarter_data in quarterly_data.iter() {
@@ -552,28 +521,21 @@ mod tests {
     #[test]
     fn test_compute_yearly_data() {
         use std::collections::HashMap;
-        use std::collections::HashSet;
-
-        // Create yearly observation data (HashMap of year -> (observations, checklists))
+        // Create yearly observation data (HashMap of year -> (observations, checklist_count))
         let mut yearly_data = HashMap::new();
 
-        // 2020: 10 observations from 5 checklists
-        let mut checklists_2020 = HashSet::new();
-        checklists_2020.insert("S1".to_string());
-        checklists_2020.insert("S2".to_string());
-        checklists_2020.insert("S3".to_string());
-        checklists_2020.insert("S4".to_string());
-        checklists_2020.insert("S5".to_string());
-        yearly_data.insert(2020, (10, checklists_2020));
+        // 2020: 10 observations from 5 checklists with species
+        yearly_data.insert(2020, (10, 5));
 
-        // 2022: 5 observations from 3 checklists
-        let mut checklists_2022 = HashSet::new();
-        checklists_2022.insert("S6".to_string());
-        checklists_2022.insert("S7".to_string());
-        checklists_2022.insert("S8".to_string());
-        yearly_data.insert(2022, (5, checklists_2022));
+        // 2022: 5 observations from 3 checklists with species
+        yearly_data.insert(2022, (5, 3));
 
-        let results = compute_yearly_data_from_aggregates(&yearly_data, 20.0);
+        // Create yearly complete checklists (all checklists in cell per year)
+        let mut yearly_complete = HashMap::new();
+        yearly_complete.insert(2020, 8);  // 8 total complete checklists in 2020
+        yearly_complete.insert(2022, 8);  // 8 total complete checklists in 2022
+
+        let results = compute_yearly_data_from_aggregates(&yearly_data, &yearly_complete);
 
         assert_eq!(results.len(), 2);
 
@@ -599,21 +561,21 @@ mod tests {
     #[test]
     fn test_compute_yearly_data_edge_cases() {
         use std::collections::HashMap;
-        use std::collections::HashSet;
 
         // Test empty data
-        let yearly_data: HashMap<u16, (u32, HashSet<String>)> = HashMap::new();
-        let results = compute_yearly_data_from_aggregates(&yearly_data, 0.0);
+        let yearly_data: HashMap<u16, (u32, u32)> = HashMap::new();
+        let yearly_complete: HashMap<u16, u32> = HashMap::new();
+        let results = compute_yearly_data_from_aggregates(&yearly_data, &yearly_complete);
         assert_eq!(results.len(), 0);
 
         // Test single year
         let mut yearly_data = HashMap::new();
-        let mut checklists = HashSet::new();
-        checklists.insert("S1".to_string());
-        checklists.insert("S2".to_string());
-        yearly_data.insert(2023, (15, checklists));
+        yearly_data.insert(2023, (15, 2));  // 15 observations from 2 checklists with species
 
-        let results = compute_yearly_data_from_aggregates(&yearly_data, 10.0);
+        let mut yearly_complete = HashMap::new();
+        yearly_complete.insert(2023, 2);  // 2 total complete checklists
+
+        let results = compute_yearly_data_from_aggregates(&yearly_data, &yearly_complete);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].year, 2023);
         assert_eq!(results[0].observations, 15);
@@ -625,25 +587,21 @@ mod tests {
     #[test]
     fn test_compute_yearly_data_frequency_normalization() {
         use std::collections::HashMap;
-        use std::collections::HashSet;
 
         // Test that frequency stays within [0.0, 1.0] range with multiple years
         let mut yearly_data = HashMap::new();
+        let mut yearly_complete = HashMap::new();
 
         // Add data for multiple years with varying checklist counts
         for year in 2015..=2025 {
             let obs_count = (year - 2015 + 1) as u32 * 5;
-            let checklist_count = ((year - 2015) % 5 + 1) as usize;
+            let checklist_count = ((year - 2015) % 5 + 1) as u32;  // Varying checklist counts (1-5)
 
-            let mut checklists = HashSet::new();
-            for i in 0..checklist_count {
-                checklists.insert(format!("S{}-{}", year, i));
-            }
-
-            yearly_data.insert(year, (obs_count, checklists));
+            yearly_data.insert(year, (obs_count, checklist_count));
+            yearly_complete.insert(year, 20);  // 20 complete checklists per year
         }
 
-        let results = compute_yearly_data_from_aggregates(&yearly_data, 200.0);
+        let results = compute_yearly_data_from_aggregates(&yearly_data, &yearly_complete);
 
         // Verify all frequencies are in valid range
         for year_data in results.iter() {
@@ -714,12 +672,13 @@ mod tests {
         let mut cell_data = H3CellData::new(cell, lat, lon);
 
         // Add 3 observations from 2 checklists
+        // IMPORTANT: Records must be sorted by checklist ID for the optimization to work
         let mut record1 = sample_record();
         record1.sampling_event_id = "S1".to_string();
         let mut record2 = sample_record();
-        record2.sampling_event_id = "S2".to_string();
+        record2.sampling_event_id = "S1".to_string(); // Same checklist as record1 (sorted together)
         let mut record3 = sample_record();
-        record3.sampling_event_id = "S1".to_string(); // Same checklist as record1
+        record3.sampling_event_id = "S2".to_string(); // Different checklist
 
         cell_data.add_observation(&record1, &record1.taxon_concept_id).unwrap();
         cell_data.add_observation(&record2, &record2.taxon_concept_id).unwrap();

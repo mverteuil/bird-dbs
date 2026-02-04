@@ -5,7 +5,7 @@ use crate::taxon_registry::{normalize_species_name, TaxonRegistry};
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate};
 use h3o::CellIndex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub struct H3Aggregator {
     pub grid: H3Grid,
@@ -18,18 +18,41 @@ pub struct H3CellData {
     pub center_lat: f64,
     pub center_lon: f64,
     pub species: HashMap<String, SpeciesAccumulator>,
-    pub total_checklists: HashSet<String>,
-    pub complete_checklists: HashSet<String>,
+    pub total_checklists: u32,
+    pub complete_checklists: u32,
     pub date_range_start: Option<NaiveDate>,
     pub date_range_end: Option<NaiveDate>,
+
+    // Last-seen tracking for cell-level checklists
+    last_checklist_id: Option<String>,
+    last_complete_checklist_id: Option<String>,
+
+    // Group deduplication tracking
+    // Assumes data is sorted by (LAT, LON, GROUP ID NULLS LAST, SAMPLING ID, TAXON, DATE)
+    current_group_id: Option<String>,
+    species_in_current_group: std::collections::HashSet<String>,
+
+    // Temporal complete checklist tracking (for correct frequency denominators)
+    yearly_complete_checklists: HashMap<u16, u32>,      // year -> count
+    quarterly_complete_checklists: [u32; 4],            // Q1-Q4
+    monthly_complete_checklists: [u32; 12],             // Jan-Dec
+    weekly_complete_checklists: [u32; 48],              // Week 1-48
+
+    // Last-seen tracking for temporal buckets
+    last_yearly_checklist: HashMap<u16, Option<String>>,
+    last_quarterly_checklist: [Option<String>; 4],
+    last_monthly_checklist: [Option<String>; 12],
+    last_weekly_checklist: [Option<String>; 48],
 }
 
 pub struct SpeciesAccumulator {
     pub avibase_id: String,
     pub scientific_name: String,
     pub is_species_level: bool,  // Track if avibase_id came from species-level record
-    pub checklists: HashSet<String>,
-    pub complete_checklists: HashSet<String>,
+
+    // Checklist counters (no longer storing all IDs - using sorted data optimization)
+    pub total_checklists: u32,
+    pub complete_checklists: u32,
 
     // Observation dates (for min/max tracking)
     pub first_observation: Option<NaiveDate>,
@@ -43,14 +66,23 @@ pub struct SpeciesAccumulator {
     pub high_quality_obs: u32,
     pub low_quality_obs: u32,
 
-    // Temporal tracking (incremental)
+    // Temporal tracking (incremental counters)
     pub monthly_obs: [u32; 12],
-    pub monthly_checklists: [HashSet<String>; 12],
-    pub yearly_data: HashMap<u16, (u32, HashSet<String>)>, // year -> (obs_count, checklists)
+    pub monthly_checklists: [u32; 12],
+    pub yearly_data: HashMap<u16, (u32, u32)>, // year -> (obs_count, checklist_count)
     pub quarterly_obs: [u32; 4],
-    pub quarterly_checklists: [HashSet<String>; 4],
+    pub quarterly_checklists: [u32; 4],
     pub weekly_obs: [u32; 48],  // BirdNET uses 48 weeks (365 days / 7.6 days per week)
-    pub weekly_checklists: [HashSet<String>; 48],
+    pub weekly_checklists: [u32; 48],
+
+    // Last-seen tracking for sorted data optimization
+    // Assumes data is sorted by GROUP_IDENTIFIER (or effective checklist ID)
+    last_checklist_id: Option<String>,
+    last_complete_checklist_id: Option<String>,
+    last_monthly_checklist: [Option<String>; 12],
+    last_yearly_checklist: HashMap<u16, Option<String>>,
+    last_quarterly_checklist: [Option<String>; 4],
+    last_weekly_checklist: [Option<String>; 48],
 }
 
 pub struct ObservationEvent {
@@ -215,24 +247,111 @@ impl H3CellData {
             center_lat,
             center_lon,
             species: HashMap::new(),
-            total_checklists: HashSet::new(),
-            complete_checklists: HashSet::new(),
+            total_checklists: 0,
+            complete_checklists: 0,
             date_range_start: None,
             date_range_end: None,
+            last_checklist_id: None,
+            last_complete_checklist_id: None,
+            current_group_id: None,
+            species_in_current_group: std::collections::HashSet::new(),
+            yearly_complete_checklists: HashMap::new(),
+            quarterly_complete_checklists: [0; 4],
+            monthly_complete_checklists: [0; 12],
+            weekly_complete_checklists: [0; 48],
+            last_yearly_checklist: HashMap::new(),
+            last_quarterly_checklist: [None, None, None, None],
+            last_monthly_checklist: [
+                None, None, None, None, None, None,
+                None, None, None, None, None, None,
+            ],
+            last_weekly_checklist: [
+                None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None,
+            ],
         }
     }
 
     pub fn add_observation(&mut self, record: &EBirdRecord, canonical_taxon_id: &str) -> Result<()> {
         let checklist_id = record.get_checklist_id();
 
-        // Track checklists
-        self.total_checklists.insert(checklist_id.clone());
-        if record.is_complete_checklist() {
-            self.complete_checklists.insert(checklist_id.clone());
+        // Group-based species deduplication
+        // Data is sorted by (LAT, LON, GROUP ID NULLS LAST, SAMPLING ID, TAXON, DATE)
+        // If group ID changes, reset the species set. If a species appears multiple
+        // times in the same group (from different observers), skip duplicates.
+        if let Some(ref group_id) = record.group_identifier {
+            // Check if we've moved to a new group
+            if self.current_group_id.as_ref() != Some(group_id) {
+                // New group - reset species tracking
+                self.current_group_id = Some(group_id.clone());
+                self.species_in_current_group.clear();
+            }
+
+            // Check if we've already seen this species in this group
+            let normalized_name = crate::taxon_registry::normalize_species_name(&record.scientific_name);
+            if self.species_in_current_group.contains(&normalized_name) {
+                // Duplicate species in same group - skip
+                return Ok(());
+            }
+            // Mark species as seen in this group
+            self.species_in_current_group.insert(normalized_name.clone());
+        } else {
+            // Individual checklist (no group) - reset group tracking
+            if self.current_group_id.is_some() {
+                self.current_group_id = None;
+                self.species_in_current_group.clear();
+            }
         }
 
-        // Update date range
+        // Track cell-level checklists with sorted data optimization
+        // Only increment if this is a new checklist (different from last seen)
+        if self.last_checklist_id.as_ref() != Some(&checklist_id) {
+            self.total_checklists += 1;
+            self.last_checklist_id = Some(checklist_id.clone());
+        }
+
+        // Update date range (needed for temporal tracking)
         let date = record.parse_date()?;
+
+        if record.is_complete_checklist() {
+            if self.last_complete_checklist_id.as_ref() != Some(&checklist_id) {
+                self.complete_checklists += 1;
+                self.last_complete_checklist_id = Some(checklist_id.clone());
+
+                // Track temporal complete checklists for correct frequency denominators
+                // Yearly tracking
+                let year = date.year() as u16;
+                if self.last_yearly_checklist.get(&year) != Some(&Some(checklist_id.clone())) {
+                    *self.yearly_complete_checklists.entry(year).or_insert(0) += 1;
+                    self.last_yearly_checklist.insert(year, Some(checklist_id.clone()));
+                }
+
+                // Quarterly tracking (Q1-Q4)
+                let quarter = ((date.month0() / 3) as usize).min(3);
+                if self.last_quarterly_checklist[quarter].as_ref() != Some(&checklist_id) {
+                    self.quarterly_complete_checklists[quarter] += 1;
+                    self.last_quarterly_checklist[quarter] = Some(checklist_id.clone());
+                }
+
+                // Monthly tracking (Jan-Dec, 0-indexed)
+                let month = date.month0() as usize;
+                if self.last_monthly_checklist[month].as_ref() != Some(&checklist_id) {
+                    self.monthly_complete_checklists[month] += 1;
+                    self.last_monthly_checklist[month] = Some(checklist_id.clone());
+                }
+
+                // Weekly tracking (1-48)
+                let week = ((date.ordinal0() / 7).min(47)) as usize;
+                if self.last_weekly_checklist[week].as_ref() != Some(&checklist_id) {
+                    self.weekly_complete_checklists[week] += 1;
+                    self.last_weekly_checklist[week] = Some(checklist_id.clone());
+                }
+            }
+        }
         self.date_range_start = Some(self.date_range_start.map(|d| d.min(date)).unwrap_or(date));
         self.date_range_end = Some(self.date_range_end.map(|d| d.max(date)).unwrap_or(date));
 
@@ -249,8 +368,8 @@ impl H3CellData {
                 avibase_id: canonical_taxon_id.to_string(),
                 scientific_name: normalized_name.clone(),
                 is_species_level: true, // Canonical ID is always the best one
-                checklists: HashSet::new(),
-                complete_checklists: HashSet::new(),
+                total_checklists: 0,
+                complete_checklists: 0,
                 first_observation: None,
                 last_observation: None,
                 first_high_quality_observation: None,
@@ -258,12 +377,18 @@ impl H3CellData {
                 high_quality_obs: 0,
                 low_quality_obs: 0,
                 monthly_obs: [0; 12],
-                monthly_checklists: Default::default(),
+                monthly_checklists: [0; 12],
                 yearly_data: HashMap::new(),
                 quarterly_obs: [0; 4],
-                quarterly_checklists: Default::default(),
+                quarterly_checklists: [0; 4],
                 weekly_obs: [0; 48],
-                weekly_checklists: std::array::from_fn(|_| HashSet::new()),
+                weekly_checklists: [0; 48],
+                last_checklist_id: None,
+                last_complete_checklist_id: None,
+                last_monthly_checklist: std::array::from_fn(|_| None),
+                last_yearly_checklist: HashMap::new(),
+                last_quarterly_checklist: std::array::from_fn(|_| None),
+                last_weekly_checklist: std::array::from_fn(|_| None),
             });
 
         // CRITICAL: Always sync avibase_id with canonical ID from global registry
@@ -287,10 +412,17 @@ impl H3CellData {
                 .unwrap_or(date),
         );
 
-        // Track checklists
-        species.checklists.insert(checklist_id.clone());
+        // Track species-level checklists with sorted data optimization
+        if species.last_checklist_id.as_ref() != Some(&checklist_id) {
+            species.total_checklists += 1;
+            species.last_checklist_id = Some(checklist_id.clone());
+        }
+
         if record.is_complete_checklist() {
-            species.complete_checklists.insert(checklist_id.clone());
+            if species.last_complete_checklist_id.as_ref() != Some(&checklist_id) {
+                species.complete_checklists += 1;
+                species.last_complete_checklist_id = Some(checklist_id.clone());
+            }
         }
 
         // Update quality tracking
@@ -319,27 +451,49 @@ impl H3CellData {
             species.low_quality_obs += 1;
         }
 
-        // Update monthly data
+        // Update monthly data with sorted optimization
         let month = (date.month0() as usize).min(11);
         species.monthly_obs[month] += 1;
-        species.monthly_checklists[month].insert(checklist_id.clone());
+        if record.is_complete_checklist() {
+            if species.last_monthly_checklist[month].as_ref() != Some(&checklist_id) {
+                species.monthly_checklists[month] += 1;
+                species.last_monthly_checklist[month] = Some(checklist_id.clone());
+            }
+        }
 
-        // Update yearly data
+        // Update yearly data with sorted optimization
         let year = date.year() as u16;
-        let yearly_entry = species.yearly_data.entry(year).or_insert((0, HashSet::new()));
+        let yearly_entry = species.yearly_data.entry(year).or_insert((0, 0));
         yearly_entry.0 += 1; // increment observation count
-        yearly_entry.1.insert(checklist_id.clone());
 
-        // Update quarterly data
+        if record.is_complete_checklist() {
+            let yearly_last = species.last_yearly_checklist.entry(year).or_insert(None);
+            if yearly_last.as_ref() != Some(&checklist_id) {
+                yearly_entry.1 += 1; // increment checklist count (complete only)
+                *yearly_last = Some(checklist_id.clone());
+            }
+        }
+
+        // Update quarterly data with sorted optimization
         let quarter = ((date.month0() / 3) as usize).min(3);
         species.quarterly_obs[quarter] += 1;
-        species.quarterly_checklists[quarter].insert(checklist_id.clone());
+        if record.is_complete_checklist() {
+            if species.last_quarterly_checklist[quarter].as_ref() != Some(&checklist_id) {
+                species.quarterly_checklists[quarter] += 1;
+                species.last_quarterly_checklist[quarter] = Some(checklist_id.clone());
+            }
+        }
 
-        // Update weekly data (BirdNET uses 48 weeks, ~7.6 days per week)
+        // Update weekly data with sorted optimization
         let day_of_year = date.ordinal() as usize; // 1-366
         let week = ((day_of_year - 1) * 48 / 365).min(47); // Convert to 0-47, then clamp
         species.weekly_obs[week] += 1;
-        species.weekly_checklists[week].insert(checklist_id);
+        if record.is_complete_checklist() {
+            if species.last_weekly_checklist[week].as_ref() != Some(&checklist_id) {
+                species.weekly_checklists[week] += 1;
+                species.last_weekly_checklist[week] = Some(checklist_id);
+            }
+        }
 
         Ok(())
     }
@@ -350,7 +504,7 @@ impl H3CellData {
         config: &FilterConfig,
         sampling_data: &HashMap<CellIndex, usize>,
     ) -> GridCellPack {
-        let total_complete = self.complete_checklists.len() as f64;
+        let total_complete = self.complete_checklists as f64;
         let total_sampled = sampling_data.get(&self.h3_cell).copied();
 
         // Use sampling data for frequency calculations if available and reliable
@@ -370,8 +524,8 @@ impl H3CellData {
             .filter_map(|(_, acc)| {
                 // Total observations = sum of high + low quality
                 let total_obs = acc.high_quality_obs + acc.low_quality_obs;
-                let total_lists = acc.checklists.len() as u32;
-                let complete_lists = acc.complete_checklists.len() as u32;
+                let total_lists = acc.total_checklists;
+                let complete_lists = acc.complete_checklists;
 
                 // Use total_complete as denominator since complete_lists comes from observation data
                 let yearly_frequency = if total_complete > 0.0 {
@@ -416,24 +570,25 @@ impl H3CellData {
                 };
 
                 // Compute temporal data from pre-computed aggregates
+                // Use cell's temporal complete checklists for correct frequency denominators
                 let monthly_data = compute_monthly_data_from_aggregates(
                     &acc.monthly_obs,
                     &acc.monthly_checklists,
-                    total_complete,
+                    &self.monthly_complete_checklists,
                 );
                 let yearly_data = compute_yearly_data_from_aggregates(
                     &acc.yearly_data,
-                    total_complete,
+                    &self.yearly_complete_checklists,
                 );
                 let quarterly_data = compute_quarterly_data_from_aggregates(
                     &acc.quarterly_obs,
                     &acc.quarterly_checklists,
-                    total_complete,
+                    &self.quarterly_complete_checklists,
                 );
                 let weekly_data = compute_weekly_data_from_aggregates(
                     &acc.weekly_obs,
                     &acc.weekly_checklists,
-                    total_complete,
+                    &self.weekly_complete_checklists,
                 );
 
                 // Use avibase_id directly from accumulator (populated from record.taxon_concept_id)
@@ -458,7 +613,7 @@ impl H3CellData {
             })
             .collect();
 
-        let data_quality = match self.complete_checklists.len() {
+        let data_quality = match self.complete_checklists {
             n if n >= 100 => "excellent",
             n if n >= 50 => "good",
             n if n >= 20 => "fair",
@@ -473,8 +628,8 @@ impl H3CellData {
             resolution: grid.resolution(),
             center_lat: self.center_lat,
             center_lon: self.center_lon,
-            total_checklists: self.total_checklists.len(),
-            complete_checklists: self.complete_checklists.len(),
+            total_checklists: self.total_checklists as usize,
+            complete_checklists: self.complete_checklists as usize,
             total_observations,
             date_range_start: self
                 .date_range_start
@@ -491,22 +646,18 @@ impl H3CellData {
 
 pub(crate) fn compute_monthly_data_from_aggregates(
     monthly_obs: &[u32; 12],
-    monthly_checklists: &[HashSet<String>; 12],
-    _total_complete_checklists: f64, // Kept for API compatibility but not used for frequency calculation
+    monthly_checklists: &[u32; 12],
+    monthly_complete_checklists: &[u32; 12], // Cell's complete checklists per month
 ) -> Vec<MonthlyData> {
-    // Calculate total checklists from observation data to ensure frequency <= 1.0
-    let total_obs_checklists = monthly_checklists
-        .iter()
-        .map(|set| set.len() as f64)
-        .sum::<f64>();
-
     (1..=12)
         .map(|month| {
             let idx = (month - 1) as usize;
-            let checklists = monthly_checklists[idx].len() as u32;
-            // Use observation data total as denominator to ensure valid frequency range
-            let frequency = if total_obs_checklists > 0.0 {
-                checklists as f64 / total_obs_checklists
+            let checklists = monthly_checklists[idx];
+            let cell_complete = monthly_complete_checklists[idx] as f64;
+
+            // Calculate frequency as species_checklists / cell_complete_checklists_for_month
+            let frequency = if cell_complete > 0.0 {
+                checklists as f64 / cell_complete
             } else {
                 0.0
             };
@@ -523,22 +674,18 @@ pub(crate) fn compute_monthly_data_from_aggregates(
 }
 
 pub(crate) fn compute_yearly_data_from_aggregates(
-    yearly_data: &HashMap<u16, (u32, HashSet<String>)>,
-    _total_complete_checklists: f64, // Kept for API compatibility but not used for frequency calculation
+    yearly_data: &HashMap<u16, (u32, u32)>,
+    yearly_complete_checklists: &HashMap<u16, u32>, // Cell's complete checklists per year
 ) -> Vec<YearlyData> {
-    // Calculate total checklists from observation data to ensure frequency <= 1.0
-    let total_obs_checklists = yearly_data
-        .values()
-        .map(|(_, checklists)| checklists.len() as f64)
-        .sum::<f64>();
-
     let mut results: Vec<YearlyData> = yearly_data
         .iter()
         .map(|(year, (observations, checklists))| {
-            let checklists_count = checklists.len() as u32;
-            // Use observation data total as denominator to ensure valid frequency range
-            let frequency = if total_obs_checklists > 0.0 {
-                checklists_count as f64 / total_obs_checklists
+            // Get cell's complete checklists for this specific year
+            let cell_complete = yearly_complete_checklists.get(year).copied().unwrap_or(0) as f64;
+
+            // Calculate frequency as species_checklists / cell_complete_checklists_for_year
+            let frequency = if cell_complete > 0.0 {
+                *checklists as f64 / cell_complete
             } else {
                 0.0
             };
@@ -546,7 +693,7 @@ pub(crate) fn compute_yearly_data_from_aggregates(
             YearlyData {
                 year: *year,
                 observations: *observations,
-                checklists: checklists_count,
+                checklists: *checklists,
                 frequency,
             }
         })
@@ -558,22 +705,18 @@ pub(crate) fn compute_yearly_data_from_aggregates(
 
 pub(crate) fn compute_quarterly_data_from_aggregates(
     quarterly_obs: &[u32; 4],
-    quarterly_checklists: &[HashSet<String>; 4],
-    _total_complete_checklists: f64, // Kept for API compatibility but not used for frequency calculation
+    quarterly_checklists: &[u32; 4],
+    quarterly_complete_checklists: &[u32; 4], // Cell's complete checklists per quarter
 ) -> Vec<QuarterlyData> {
-    // Calculate total checklists from observation data to ensure frequency <= 1.0
-    let total_obs_checklists = quarterly_checklists
-        .iter()
-        .map(|set| set.len() as f64)
-        .sum::<f64>();
-
     (1..=4)
         .map(|quarter| {
             let idx = (quarter - 1) as usize;
-            let checklists = quarterly_checklists[idx].len() as u32;
-            // Use observation data total as denominator to ensure valid frequency range
-            let frequency = if total_obs_checklists > 0.0 {
-                checklists as f64 / total_obs_checklists
+            let checklists = quarterly_checklists[idx];
+            let cell_complete = quarterly_complete_checklists[idx] as f64;
+
+            // Calculate frequency as species_checklists / cell_complete_checklists_for_quarter
+            let frequency = if cell_complete > 0.0 {
+                checklists as f64 / cell_complete
             } else {
                 0.0
             };
@@ -591,22 +734,18 @@ pub(crate) fn compute_quarterly_data_from_aggregates(
 
 pub(crate) fn compute_weekly_data_from_aggregates(
     weekly_obs: &[u32; 48],
-    weekly_checklists: &[HashSet<String>; 48],
-    _total_complete_checklists: f64, // Kept for API compatibility but not used for frequency calculation
+    weekly_checklists: &[u32; 48],
+    weekly_complete_checklists: &[u32; 48], // Cell's complete checklists per week
 ) -> Vec<WeeklyData> {
-    // Calculate total checklists from observation data to ensure frequency <= 1.0
-    let total_obs_checklists = weekly_checklists
-        .iter()
-        .map(|set| set.len() as f64)
-        .sum::<f64>();
-
     (1..=48)
         .map(|week| {
             let idx = (week - 1) as usize;
-            let checklists = weekly_checklists[idx].len() as u32;
-            // Use observation data total as denominator to ensure valid frequency range
-            let frequency = if total_obs_checklists > 0.0 {
-                checklists as f64 / total_obs_checklists
+            let checklists = weekly_checklists[idx];
+            let cell_complete = weekly_complete_checklists[idx] as f64;
+
+            // Calculate frequency as species_checklists / cell_complete_checklists_for_week
+            let frequency = if cell_complete > 0.0 {
+                checklists as f64 / cell_complete
             } else {
                 0.0
             };
