@@ -1,0 +1,109 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+  "pytest>=7.4.0",
+  "pytest-cov>=4.1.0",
+  "pytest-mock>=3.11.0"
+]
+
+[project]
+name = "ebd-pack-builder"
+version = "0.1.0"
+description = "eBird Basic Dataset pack builder for BirdNET-Pi region packs"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+  {name = "BirdNET-Pi Contributors"}
+]
+keywords = ["birds", "ebird", "h3", "parquet", "sqlite", "data-pipeline"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12"
+]
+dependencies = [
+  "click>=8.2.1",
+  "duckdb>=1.0.0",
+  "h3>=3.7.0",
+  "polars>=1.0.0",
+  "pydantic>=2.0.0",
+]
+
+[project.scripts]
+ebd = "ebd_pack_builder.cli:cli"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "*/pytest-of-*"]
+
+[tool.pyright]
+exclude = ["**/build", "**/__pycache__"]
+include = ["src"]
+pythonVersion = "3.12"
+reportArgumentType = "none"
+reportMissingTypeStubs = "none"
+reportUnknownArgumentType = "none"
+reportUnknownLambdaType = "none"
+reportUnknownMemberType = "none"
+reportUnknownParameterType = "none"
+reportUnknownVariableType = "none"
+reportUnnecessaryIsInstance = "none"
+typeCheckingMode = "standard"
+useLibraryCodeForTypes = true
+venv = ".venv"
+venvPath = "."
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+norecursedirs = ["docs", "*.egg-info", ".git", ".venv", "data"]
+addopts = [
+  "-v",
+  "--strict-markers",
+  "--tb=short",
+  "--cov=.",
+  "--cov-branch",
+  "--cov-config=pyproject.toml",
+  "--cov-report=term-missing",
+  "--cov-report=html",
+  "--cov-report=xml"
+]
+markers = [
+  "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+  "integration: marks tests as integration tests",
+  "unit: marks tests as unit tests"
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+  "E", # pycodestyle errors
+  "W", # pycodestyle warnings
+  "F", # pyflakes
+  "I", # isort
+  "B", # flake8-bugbear
+  "C4", # flake8-comprehensions
+  "UP" # pyupgrade
+]
+ignore = [
+  "E501" # line too long (handled by black)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ebd_pack_builder"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

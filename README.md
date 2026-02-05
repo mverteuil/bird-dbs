@@ -23,6 +23,39 @@ Download from [eBird Basic Dataset](https://ebird.org/data/download) (requires a
 
 ---
 
+## Alternative: Unified ebd-pack-builder CLI
+
+The `ebd-pack-builder` package provides a unified CLI that consolidates all pipeline steps
+into a single tool with consistent interface and state tracking.
+
+```bash
+cd bird-dbs/ebd-pack-builder
+uv sync
+
+# Run individual steps
+uv run ebd convert --input /path/to/ebd.tar --output-dir ./ebird_parquet
+uv run ebd sort --input-dir ./ebird_parquet --output-dir ./ebird_by_location
+uv run ebd partition --input-dir ./ebird_by_location --output-dir ./ebird_partitioned
+uv run ebd density-report --boundary-cells ./ebird_partitioned/boundary_cells.json --output ./density.json
+uv run ebd size-manifest --density-report ./density.json --output ./size_manifest.json
+# Run pack-planner separately (Step 5)
+uv run ebd build --partitioned-dir ./ebird_partitioned --manifest ./pack_manifest.json --output-dir ./packs
+uv run ebd verify --packs-dir ./packs
+
+# Check pipeline status
+uv run ebd status --state-file ./ebd_state.json
+```
+
+**Features:**
+- JSON-based state tracking for resumability
+- Consistent CLI interface across all steps
+- `--force` flag to re-run completed steps
+- `--skip-existing` for build resumability
+
+The instructions below use the standalone scripts. Both approaches produce identical output.
+
+---
+
 ## Pipeline Overview
 
 ```
@@ -373,7 +406,15 @@ uv run release-publisher \
 
 ```
 bird-dbs/
-├── scripts/                          # Data processing scripts
+├── ebd-pack-builder/                 # Unified CLI (recommended)
+│   └── src/ebd_pack_builder/         # Python package
+│       ├── cli.py                    # Click CLI with subcommands
+│       ├── pipeline.py               # State management
+│       ├── steps/                    # Pipeline step modules
+│       ├── models/                   # Pydantic models
+│       └── utils/                    # Shared utilities
+│
+├── scripts/                          # Standalone scripts (legacy)
 │   ├── convert_ebird_to_parquet.py   # Step 1: Raw TSV -> Parquet
 │   ├── sort_parquet_chunked.py       # Step 2: Sort by location
 │   ├── partition_by_boundary.py      # Step 3: H3 partitioning
@@ -464,6 +505,10 @@ The entire pipeline is idempotent and can be re-run safely.
 
 ```
 bird-dbs/
+├── [EBD PIPELINE] ────────────────────────────────────────────────────
+│   ├── ebd-pack-builder/              # Unified CLI (recommended)
+│   └── scripts/                       # Standalone scripts (legacy)
+│
 ├── [BUILDERS] ────────────────────────────────────────────────────────
 │   ├── ioc-builder/                   # IOC World Bird List -> SQLite
 │   └── wikidata-builder/              # Wikidata SPARQL -> SQLite
@@ -475,9 +520,6 @@ bird-dbs/
 │   ├── avilistr-builder/              # R: Avibase taxonomy extraction
 │   ├── pack-manifest-visualizer/      # TypeScript: H3 visualization
 │   └── release-publisher/             # Python: GitHub release automation
-│
-├── [DATA SCRIPTS] ────────────────────────────────────────────────────
-│   └── scripts/                       # Python/Polars/DuckDB data pipeline
 │
 ├── [SHARED DATA] ─────────────────────────────────────────────────────
 │   ├── shared/avilistr/               # Avibase taxonomy mapping (CSV)
