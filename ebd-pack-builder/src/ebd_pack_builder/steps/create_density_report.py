@@ -59,16 +59,9 @@ def create_density_report(
             cell_data["checklist_count"], cell_data["species_count"]
         )
 
-        # Determine recommended data resolution based on density
-        checklists = cell_data["checklist_count"]
-        if checklists >= 100000:
-            recommended_res = 7
-        elif checklists >= 10000:
-            recommended_res = 6
-        elif checklists >= 1000:
-            recommended_res = 5
-        else:
-            recommended_res = 4
+        # Data resolution is always 5 (finest tier in DATA_RESOLUTIONS)
+        # The database uses fixed tiers [5, 4, 2] with fallback, not per-cell resolution
+        recommended_res = 5
 
         cells.append(
             {

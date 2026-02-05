@@ -22,6 +22,8 @@ interface PackManifest {
       lat?: number;
       lon?: number;
     };
+    size_mb?: number;
+    pack_count?: number;
   }>;
 }
 
@@ -29,46 +31,53 @@ function generateHtml(manifestPath: string): string {
   const manifest: PackManifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
 
   // Extract regions with resilient schema handling
+  // Show coverage at standard tiers: res 2 (regional), res 4 (metro), res 5 (hyperlocal)
+  const TARGET_RESOLUTIONS = [2, 4, 5];
+
   const regions = (manifest.regions || []).map(region => {
-    const cells = region.h3_cells || [];
     const packs = region.packs || [];
 
-    // Group by resolution - compute coverage at res 5, 4, and 2
     const resolutionLayers = new Map<number, Set<string>>();
-    resolutionLayers.set(2, new Set());
-    resolutionLayers.set(4, new Set());
-    resolutionLayers.set(5, new Set());
+    TARGET_RESOLUTIONS.forEach(r => resolutionLayers.set(r, new Set()));
 
     packs.forEach(pack => {
-      if (pack.boundary_cell) {
-        // Res 4: the boundary cell itself
-        resolutionLayers.get(4)!.add(pack.boundary_cell);
+      const cell = pack.boundary_cell;
+      const boundaryRes = pack.boundary_resolution;
 
-        // Res 5: children of the boundary cell
-        try {
-          const children = cellToChildren(pack.boundary_cell, 5);
-          children.forEach(child => resolutionLayers.get(5)!.add(child));
-        } catch (e) {
-          console.warn(`Failed to get children for ${pack.boundary_cell}:`, e);
-        }
-
-        // Res 2: parent of the boundary cell
-        try {
-          const parent = cellToParent(pack.boundary_cell, 2);
-          if (parent) resolutionLayers.get(2)!.add(parent);
-        } catch (e) {
-          console.warn(`Failed to get parent for ${pack.boundary_cell}:`, e);
-        }
+      if (cell && boundaryRes !== undefined) {
+        TARGET_RESOLUTIONS.forEach(targetRes => {
+          try {
+            if (targetRes === boundaryRes) {
+              // Exact match - use the cell directly
+              resolutionLayers.get(targetRes)!.add(cell);
+            } else if (targetRes < boundaryRes) {
+              // Target is coarser - get parent
+              const parent = cellToParent(cell, targetRes);
+              if (parent) resolutionLayers.get(targetRes)!.add(parent);
+            } else {
+              // Target is finer - get children
+              const children = cellToChildren(cell, targetRes);
+              children.forEach(child => resolutionLayers.get(targetRes)!.add(child));
+            }
+          } catch (e) {
+            // Some conversions may fail for edge cases
+          }
+        });
       }
     });
 
     return {
       id: region.region_id || 'unknown',
       center: region.center || { lat: 0, lon: 0 },
-      resolutions: Array.from(resolutionLayers.entries()).map(([res, cells]) => ({
-        resolution: res,
-        cells: Array.from(cells)
-      }))
+      sizeMb: region.size_mb,
+      packCount: region.pack_count || packs.length,
+      resolutions: Array.from(resolutionLayers.entries())
+        .map(([res, cells]) => ({
+          resolution: res,
+          cells: Array.from(cells)
+        }))
+        .filter(layer => layer.cells.length > 0)
+        .sort((a, b) => a.resolution - b.resolution)
     };
   });
 
