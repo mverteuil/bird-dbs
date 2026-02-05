@@ -77,16 +77,17 @@ DATE_SMART_THRESHOLD = 100_000_000  # 100M rows
 
 
 def get_date_smart_partitions(
-    con: duckdb.DuckDBPyConnection, input_dir: Path
+    con: duckdb.DuckDBPyConnection, input_files: list[str]
 ) -> list[tuple[int, int, str]]:
     """Smart date partitioning: group small decades, split large ones by year."""
     print("Discovering decade sizes...")
+    files_list = ", ".join(f"'{f}'" for f in input_files)
     decades = con.execute(
         f"""
         SELECT
             CAST(SUBSTR("OBSERVATION DATE", 1, 3) || '0' AS INTEGER) AS decade,
             COUNT(*) as cnt
-        FROM read_parquet('{input_dir}/*.parquet')
+        FROM read_parquet([{files_list}])
         WHERE "OBSERVATION DATE" IS NOT NULL
         GROUP BY decade
         ORDER BY decade
@@ -115,7 +116,7 @@ def get_date_smart_partitions(
                 SELECT
                     CAST(SUBSTR("OBSERVATION DATE", 1, 4) AS INTEGER) AS year,
                     COUNT(*) as cnt
-                FROM read_parquet('{input_dir}/*.parquet')
+                FROM read_parquet([{files_list}])
                 WHERE "OBSERVATION DATE" IS NOT NULL
                   AND CAST(SUBSTR("OBSERVATION DATE", 1, 3) || '0' AS INTEGER) = {decade}
                 GROUP BY year
@@ -142,13 +143,14 @@ def get_date_smart_partitions(
     return partitions
 
 
-def get_taxon_prefixes(con: duckdb.DuckDBPyConnection, input_dir: Path) -> list[str]:
+def get_taxon_prefixes(con: duckdb.DuckDBPyConnection, input_files: list[str]) -> list[str]:
     """Get list of unique taxon ID prefixes."""
     print("Discovering taxon prefixes...")
+    files_list = ", ".join(f"'{f}'" for f in input_files)
     result = con.execute(
         f"""
         SELECT DISTINCT SUBSTR("TAXON CONCEPT ID", 1, 10) as prefix
-        FROM read_parquet('{input_dir}/*.parquet')
+        FROM read_parquet([{files_list}])
         WHERE "TAXON CONCEPT ID" IS NOT NULL
         ORDER BY prefix
     """
@@ -158,19 +160,28 @@ def get_taxon_prefixes(con: duckdb.DuckDBPyConnection, input_dir: Path) -> list[
     return prefixes
 
 
+def get_parquet_files(input_dir: Path) -> list[str]:
+    """Get list of parquet files, excluding macOS resource forks."""
+    files = sorted(input_dir.glob("*.parquet"))
+    # Filter out macOS resource fork files (._*)
+    files = [str(f) for f in files if not f.name.startswith("._")]
+    return files
+
+
 def sort_partition(
     con: duckdb.DuckDBPyConnection,
-    input_dir: Path,
+    input_files: list[str],
     output_file: Path,
     partition_filter: str,
     sort_columns: list[str],
 ) -> int:
     """Sort a single partition and write to output file."""
     order_by = ", ".join(sort_columns)
+    files_list = ", ".join(f"'{f}'" for f in input_files)
 
     query = f"""
     COPY (
-        SELECT * FROM read_parquet('{input_dir}/*.parquet')
+        SELECT * FROM read_parquet([{files_list}])
         WHERE {partition_filter}
         ORDER BY {order_by}
     ) TO '{output_file}' (
@@ -235,14 +246,19 @@ def sort_chunked(
     print(f"  Threads: 2")
     print()
 
+    # Get input files (excluding macOS resource forks)
+    input_files = get_parquet_files(input_dir)
+    print(f"Found {len(input_files)} parquet files")
+    print()
+
     # Get partition ranges
     start_time = time.time()
 
     if config["partition_ranges"] == "DATE_SMART":
-        partitions = get_date_smart_partitions(con, input_dir)
+        partitions = get_date_smart_partitions(con, input_files)
         partition_type = "date_smart"
     elif config["partition_ranges"] == "PREFIX":
-        prefixes = get_taxon_prefixes(con, input_dir)
+        prefixes = get_taxon_prefixes(con, input_files)
         partitions = prefixes  # type: ignore
         partition_type = "prefix"
     else:
@@ -281,7 +297,7 @@ def sort_chunked(
         print(f"[{i}/{len(partitions)}] {partition_name}...", end=" ", flush=True)
 
         try:
-            rows = sort_partition(con, input_dir, output_file, partition_filter, config["sort_columns"])
+            rows = sort_partition(con, input_files, output_file, partition_filter, config["sort_columns"])
 
             partition_time = time.time() - partition_start
             file_size_mb = output_file.stat().st_size / (1024**2)
