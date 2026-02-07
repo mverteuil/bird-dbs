@@ -27,7 +27,7 @@ Comprehensive documentation for the eBird Basic Dataset and region pack system d
 | [eBird Data Structure](ebd-reference/01-ebird-data-structure.md) | EBD file format, columns, and data organization |
 | [BirdNET-Pi Architecture](ebd-reference/02-birdnet-pi-architecture.md) | How BirdNET-Pi consumes region packs |
 | [Region Pack Specification](ebd-reference/03-region-pack-specification.md) | SQLite schema, H3 indexing, and pack format |
-| [Rust Pipeline Design](ebd-reference/04-rust-pipeline-design.md) | Streaming processing architecture |
+| [Python Pipeline Design](ebd-reference/04-python-pipeline-design.md) | ebd-pack-builder implementation design |
 | [Format Decision](ebd-reference/05-format-decision.md) | Why SQLite over Parquet for client-side |
 | [Grid-Based Architecture](ebd-reference/06-grid-based-architecture.md) | H3 hexagonal grid design and resolution choices |
 
@@ -64,16 +64,7 @@ Documentation for each component in the system.
 |------|-------------|
 | [ioc-builder](tools/ioc-builder.md) | Build IOC World Bird List reference database (44 languages, ~51MB) |
 | [wikidata-builder](tools/wikidata-builder.md) | Build supplemental translation database from Wikidata (4 unique languages) |
-| [ebird-builder](tools/ebird-builder.md) | Generate H3-based region pack SQLite databases from eBird data |
-
-### Analysis Tools
-
-| Tool | Description |
-|------|-------------|
-| [ebird-density-analyzer](tools/ebird-density-analyzer.md) | Analyze eBird observation density across H3 cells (Rust) |
-| [ebird-density-analyzer (Progress Feedback)](tools/ebird-density-analyzer-progress.md) | Two-pass mode progress feedback documentation |
-| [pack-planner](tools/pack-planner.md) | Partition density data into GitHub-release-sized regions (Python) |
-| [benchmark](tools/benchmark.md) | Compare Rust vs R/auk implementations |
+| [ebd-pack-builder](tools/ebd-pack-builder.md) | **Unified eBird pipeline** - complete CLI for building region packs from eBird data |
 
 ### Support Tools
 
@@ -124,16 +115,22 @@ avilistr R package ──────────────> avilistr-builder 
          │                                                                    │
          └──────────────────────────────────────────────────────────> (used by all builders)
 
-eBird EBD (~200GB) ──────────────> ebird-density-analyzer ────────────> density_reports/*.json
-                                          │
-                                          v
-                                    pack-planner ─────────────────────> pack_manifest.json
-                                          │
-                                          v
-                                    ebird-builder ────────────────────> region-packs/*.db
-                                          │
-                                          v
-                                    release-publisher ────────────────> GitHub Releases
+                              ┌─────────────────────────────────────────────────────────┐
+                              │              ebd-pack-builder (unified CLI)             │
+                              ├─────────────────────────────────────────────────────────┤
+eBird EBD (~200GB) ──────────>│ ebd convert ─> ebd sort ─> ebd partition                │
+                              │                                   │                      │
+                              │                            ebd density-report            │
+                              │                                   │                      │
+                              │                              ebd plan                    │
+                              │                                   │                      │
+                              │                              ebd build ──────────────────│──> region-packs/*.db
+                              │                                   │                      │     (~250 regions)
+                              │                             ebd package ─────────────────│──> region-packs/*.db.gz
+                              └─────────────────────────────────────────────────────────┘     (~4GB compressed)
+                                                                  │
+                                                                  v
+                                                        release-publisher ────────────> GitHub Releases
 ```
 
 ---
@@ -166,38 +163,30 @@ uv sync
 uv run python run_wikidata_poc.py --full --output ../output/wikidata_reference.db
 ```
 
-### 3. Analyze eBird Density
+### 3. Build eBird Region Packs
 
 ```bash
-cd analysis/ebird-density-analyzer
-cargo build --release
-./target/release/ebird-density-analyzer \
-  --input /path/to/ebd.tar \
-  --resolutions 2,3,4,5 \
-  --output density_reports/ \
-  --two-pass \
-  --temp-dir /tmp/temp/
-```
-
-### 4. Plan Region Packs
-
-```bash
-cd analysis/pack-planner
+cd ebd-pack-builder
 uv sync
-uv run pack-planner \
-  --density-reports density_reports/ \
-  --output-manifest pack_manifest.json \
-  --output-registry pack_registry.json
+
+# Run full pipeline (see main README for step-by-step)
+uv run ebd convert --input /path/to/ebd.tar --output-dir ./parquet
+uv run ebd sort --input-dir ./parquet --output-dir ./sorted
+uv run ebd partition --input-dir ./sorted --output-dir ./partitioned
+uv run ebd density-report --boundary-cells ./partitioned/boundary_cells.json --output ./density.json
+uv run ebd plan --density-report ./density.json --output-manifest ./manifest.json --max-region-size-mb 80
+uv run ebd build --partitioned-dir ./partitioned --manifest ./manifest.json --output-dir ./packs
+uv run ebd package --packs-dir ./packs --registry ./pack_registry.json
 ```
 
-### 5. Publish to GitHub
+### 4. Publish to GitHub
 
 ```bash
 cd release-publisher
 uv sync
 uv run release-publisher \
   --registry pack_registry.json \
-  --db-dir region-packs/ \
+  --db-dir packs/ \
   --target-repo owner/birdnetpi-ebird-packs
 ```
 

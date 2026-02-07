@@ -53,19 +53,18 @@ Key sections:
 - Hierarchical pack strategy
 - Validation rules and query examples
 
-### [04-rust-pipeline-design.md](04-rust-pipeline-design.md)
-**Implementation design for the Rust CLI tool**
+### [04-python-pipeline-design.md](04-python-pipeline-design.md)
+**Implementation design for the ebd-pack-builder CLI**
 
-Detailed technical design of the Rust pipeline, including data structures, processing flow, and code examples.
+Detailed technical design of the Python pipeline, including data structures, processing stages, and code examples.
 
 Key sections:
 - Project structure
-- Dependencies (Cargo.toml with rusqlite)
-- Core data structures (with code)
-- Processing pipeline (5 stages)
-- SQLite writer implementation
-- Performance optimizations
-- CLI usage examples
+- Dependencies (DuckDB, Polars, H3)
+- Pipeline stages (7 steps)
+- CLI interface and state management
+- Performance characteristics
+- Production results
 
 ### [05-format-decision.md](05-format-decision.md)
 **Data format evaluation and SQLite selection**
@@ -102,9 +101,9 @@ Key sections:
 2. **Learn the data**: Study [01-ebird-data-structure.md](01-ebird-data-structure.md)
 3. **Plan integration**: Review [02-birdnet-pi-architecture.md](02-birdnet-pi-architecture.md)
 4. **Understand format decision**: Read [05-format-decision.md](05-format-decision.md)
-5. **Design grid-based approach**: Study [06-grid-based-architecture.md](06-grid-based-architecture.md) ⭐ **Enhanced v2.0**
+5. **Design grid-based approach**: Study [06-grid-based-architecture.md](06-grid-based-architecture.md)
 6. **Design output**: Reference [03-region-pack-specification.md](03-region-pack-specification.md)
-7. **Build pipeline**: Implement using [04-rust-pipeline-design.md](04-rust-pipeline-design.md)
+7. **Build packs**: Use [ebd-pack-builder](../../ebd-pack-builder/) - the unified Python CLI
 
 ## Development Workflow
 
@@ -116,14 +115,19 @@ Key sections:
          │
          ▼
 ┌──────────────────┐
-│ Rust CLI Tool    │ → Implement 04-rust-pipeline-design.md
-│ (streaming)      │
+│ ebd-pack-builder │ → ebd convert → ebd sort → ebd partition →
+│ (Python CLI)     │   ebd plan → ebd build → ebd package
 └────────┬─────────┘
          │
          ▼
 ┌──────────────────┐
-│ Region Pack JSON │ → Validate against 03-region-pack-specification.md
-│ (compressed)     │
+│ Region Packs     │ → Validate against 03-region-pack-specification.md
+│ (~250 .db.gz)    │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│ release-publisher│ → Upload to GitHub Releases
 └────────┬─────────┘
          │
          ▼
@@ -135,20 +139,25 @@ Key sections:
 
 ## Data Files
 
-The parent directory (`/Volumes/backup/ebird/`) contains:
+eBird data is stored at `/Volumes/backup/ebird/`:
 
 ```
 ebird/
 ├── ebd_relAug-2025.tar (201GB)           # Full global dataset
-├── ebd_sampling_relAug-2025.tar (7.2GB)  # Sampling dataset
-├── CLAUDE.md                             # Working guide
-└── docs/                                 # This directory
-    ├── README.md                         # You are here
-    ├── 00-overview.md
-    ├── 01-ebird-data-structure.md
-    ├── 02-birdnet-pi-architecture.md
-    ├── 03-region-pack-specification.md
-    └── 04-rust-pipeline-design.md
+└── ebd_sampling_relAug-2025.tar (7.2GB)  # Sampling dataset
+```
+
+Documentation is in `bird-dbs/docs/ebd-reference/`:
+```
+docs/ebd-reference/
+├── README.md                         # You are here
+├── 00-overview.md
+├── 01-ebird-data-structure.md
+├── 02-birdnet-pi-architecture.md
+├── 03-region-pack-specification.md
+├── 04-python-pipeline-design.md
+├── 05-format-decision.md
+└── 06-grid-based-architecture.md
 ```
 
 ## Key Concepts
@@ -179,12 +188,12 @@ Species with high local occurrence get confidence multipliers:
 
 ## Technical Decisions
 
-### Why Rust for the Pipeline?
-- **Data scale**: Streaming 200GB efficiently without loading into memory
-- **Performance**: Process full dataset in 20-30 minutes
-- **Safety**: Strong type system prevents data corruption
-- **Portability**: Single binary, no runtime dependencies
-- **H3 support**: Pure Rust h3o crate (no C bindings needed)
+### Why Python for the Pipeline?
+- **DuckDB integration**: SQL-based analytics on Parquet without loading into memory
+- **Polars performance**: Near-Rust speed for DataFrame operations
+- **Ecosystem**: Better library support for H3, Parquet, SQLite
+- **Maintainability**: Easier to modify and extend
+- **Production proven**: Successfully processed 399M rows in ~30 hours
 
 ### Why SQLite for Region Packs?
 - **Performance**: 2-4x faster loading than JSON (15-30ms vs 80-120ms)
@@ -207,43 +216,25 @@ Species with high local occurrence get confidence multipliers:
 
 ## Common Workflows
 
-### Generate an H3 Grid Region Pack
+### Generate Region Packs
 
 ```bash
-# 1. Create config YAML
-cat > us-ca-sf-bay-h3.yaml <<EOF
-region_id: us-ca-sf-bay-h3
-region_name: San Francisco Bay Area (H3 Grid)
-region_type: metro
-h3_resolution: 7  # Resolution 7 = ~5km hexagons
-bounding_box:
-  min_latitude: 37.4
-  max_latitude: 38.0
-  min_longitude: -122.5
-  max_longitude: -121.8
-date_range:
-  start: 2020-01-01
-  end: 2025-08-01
-filters:
-  approved_only: true
-  complete_checklists_only: true
-  native_species_only: true
-  min_observations: 10
-  min_checklists: 5
-  min_yearly_frequency: 0.01
-  deduplication: group_identifier
-EOF
+cd bird-dbs/ebd-pack-builder
+uv sync
 
-# 2. Run generator (once implemented)
-ebird-region-pack \
-  --input ebd_relAug-2025.tar \
-  --config us-ca-sf-bay-h3.yaml \
-  --output us-ca-sf-bay-h3.db
+# Run full pipeline
+ebd convert --input /path/to/ebd.tar --output-dir ./parquet
+ebd sort --input-dir ./parquet --output-dir ./sorted
+ebd partition --input-dir ./sorted --output-dir ./partitioned
+ebd density-report --boundary-cells ./partitioned/boundary_cells.json --output ./density.json
+ebd plan --density-report ./density.json --output-manifest ./manifest.json --max-region-size-mb 80
+ebd build --partitioned-dir ./partitioned --manifest ./manifest.json --output-dir ./packs
+ebd package --packs-dir ./packs --registry ./pack_registry.json
 
-# 3. Validate output
-sqlite3 us-ca-sf-bay-h3.db "SELECT value FROM region_metadata WHERE key='total_h3_cells';"
-sqlite3 us-ca-sf-bay-h3.db "SELECT COUNT(*) FROM grid_metadata;"
-sqlite3 us-ca-sf-bay-h3.db "SELECT COUNT(DISTINCT scientific_name) FROM grid_species;"
+# Validate output
+sqlite3 ./packs/na-east-001.db "SELECT value FROM region_metadata WHERE key='region_id';"
+sqlite3 ./packs/na-east-001.db "SELECT COUNT(*) FROM grid_metadata;"
+sqlite3 ./packs/na-east-001.db "SELECT COUNT(DISTINCT scientific_name) FROM grid_species;"
 ```
 
 ### Integrate with BirdNET-Pi

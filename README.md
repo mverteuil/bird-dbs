@@ -34,13 +34,13 @@ uv run ebd convert --input /path/to/ebd.tar --output-dir ./ebird_parquet
 uv run ebd sort --input-dir ./ebird_parquet --output-dir ./ebird_by_location
 uv run ebd partition --input-dir ./ebird_by_location --output-dir ./ebird_partitioned
 uv run ebd density-report --boundary-cells ./ebird_partitioned/boundary_cells.json --output ./density.json
-uv run ebd size-manifest --density-report ./density.json --output ./size_manifest.json
-# Run pack-planner (Step 5) - see below
+uv run ebd plan --density-report ./density.json --output-manifest ./pack_manifest.json --max-region-size-mb 80
 uv run ebd build --partitioned-dir ./ebird_partitioned --manifest ./pack_manifest.json --output-dir ./packs
-uv run ebd verify --packs-dir ./packs
+uv run ebd package --packs-dir ./packs --registry ./pack_registry.json
+uv run ebd verify ./packs
 
 # Check pipeline status
-uv run ebd status --state-file ./ebd_state.json
+uv run ebd status --state-dir ./ebd_state
 ```
 
 **Features:**
@@ -79,14 +79,8 @@ ebd_relAug-2025.tar ────────────────────
                            ▼
                   density_report.json
                            │
-              STEP 4b (seconds)
-              ebd size-manifest
-                           │
-                           ▼
-                  size_manifest.json (bootstrap/estimated)
-                           │
               STEP 5 (seconds)
-         pack-planner (with --size-manifest)
+                  ebd plan
                            │
                            ├──► pack_manifest.json
                            └──► pack_registry.json
@@ -98,15 +92,21 @@ ebd_relAug-2025.tar ────────────────────
                               ebd build
                                        │
                                        ▼
-                           region_packs/*.db (~98 regions, ~19GB)
+                           region_packs/*.db (~250 regions, ~16GB)
                                        │
-                           STEP 7 (optional)
+                           STEP 7 (30 min)
+                              ebd package
+                                       │
+                                       ▼
+                           region_packs/*.db.gz (~4GB compressed)
+                                       │
+                           STEP 8 (optional)
                         pack-manifest-visualizer
                                        │
                                        ▼
                               visualization/index.html
                                        │
-                           STEP 8 (hours)
+                           STEP 9 (hours)
                           release-publisher
                                        │
                                        ▼
@@ -195,67 +195,41 @@ ebird_partitioned/
 
 ## Step 4: Create Density Report
 
-Convert boundary cell statistics to pack-planner format.
+Convert boundary cell statistics to planning format.
 
 ```bash
 uv run ebd density-report \
     --boundary-cells /Volumes/Lightroom/ebird_partitioned/boundary_cells.json \
-    --output /Volumes/Lightroom/density_report_res4.json
+    --output /Volumes/Lightroom/density_report.json
 ```
 
-**Output:** `density_report_res4.json` with:
+**Output:** `density_report.json` with:
 - Estimated pack sizes
 - Recommended data resolutions
 - Coverage statistics
 
 ---
 
-## Step 4b: Create Size Manifest
+## Step 5: Plan Region Packs
 
-Create a size manifest from density report estimates.
-
-```bash
-uv run ebd size-manifest \
-    --density-report /Volumes/Lightroom/density_report_res4.json \
-    --output /Volumes/Lightroom/size_manifest.json
-```
-
-**Output:** `size_manifest.json` with estimated per-cell sizes
-
-This bootstrap manifest uses the `estimated_pack_size_mb` values calculated during density
-report generation. These estimates are based on checklist counts and are accurate enough
-for initial region planning.
-
----
-
-## Step 5: Pack Planning
-
-Run pack-planner with the bootstrap size manifest to create regions.
+Group boundary cells into downloadable regions optimized for distribution.
 
 ```bash
-cd bird-dbs/analysis/pack-planner
-uv sync
-
-uv run pack-planner \
-    --density-reports /Volumes/Lightroom/density_reports/ \
-    --size-manifest /Volumes/Lightroom/size_manifest.json \
-    --max-region-size-mb 250 \
+uv run ebd plan \
+    --density-report /Volumes/Lightroom/density_report.json \
     --output-manifest /Volumes/Lightroom/pack_manifest.json \
-    --output-registry /Volumes/Lightroom/pack_registry.json
+    --output-registry /Volumes/Lightroom/pack_registry.json \
+    --max-region-size-mb 80
 ```
 
 **Output:**
-- `pack_manifest.json` - Regions sized to ~250 MB each
+- `pack_manifest.json` - Full region definitions for building
 - `pack_registry.json` - Minimal registry for client lookups
 
-The planner splits oversized regions using latitude-band sorting for geographic locality.
-With ~20GB total data and 250 MB target: expect ~80-100 regions globally.
-
-**Expected results (Aug 2025 data):**
-- ~98 regions
-- Max size: ~324 MB (high-density regions like north-america-great-lakes)
-- Most regions: 150-250 MB
-- Total: ~19.3 GB
+**Sizing notes:**
+- Use `--max-region-size-mb 80` to account for ~20% size underestimation
+- This keeps actual pack sizes under the 150 MB hard limit
+- Expected results (Aug 2025 data): ~250 regions, largest ~141 MB
 
 ---
 
@@ -264,15 +238,13 @@ With ~20GB total data and 250 MB target: expect ~80-100 regions globally.
 Build the SQLite region packs.
 
 ```bash
-cd bird-dbs/ebd-pack-builder
-
 uv run ebd build \
     --partitioned-dir /Volumes/Lightroom/ebird_partitioned \
     --manifest /Volumes/Lightroom/pack_manifest.json \
     --output-dir /Volumes/Lightroom/region_packs
 ```
 
-**Output:** `region_packs/*.db` - ~98 region packs, ~19 GB total
+**Output:** `region_packs/*.db` - ~250 region packs, ~16 GB total
 
 **Resume after interruption:**
 ```bash
@@ -289,12 +261,33 @@ uv run ebd build \
     --partitioned-dir /Volumes/Lightroom/ebird_partitioned \
     --manifest /Volumes/Lightroom/pack_manifest.json \
     --output-dir /Volumes/Lightroom/region_packs \
-    --region north-america-great-lakes
+    --region na-east-001
 ```
 
 ---
 
-## Step 7: Visualize Coverage (Optional)
+## Step 7: Package for Release
+
+Gzip compress all packs with release-compatible naming.
+
+```bash
+uv run ebd package \
+    --packs-dir /Volumes/Lightroom/region_packs \
+    --registry /Volumes/Lightroom/pack_registry.json \
+    --compression-level 6
+```
+
+**Output:** `region_packs/*.db.gz` - compressed packs (~25% of original size)
+
+**Results (Aug 2025 data):**
+- 250 regions packaged
+- Uncompressed: ~16 GB
+- Compressed: ~4 GB
+- Compression ratio: ~25%
+
+---
+
+## Step 8: Visualize Coverage (Optional)
 
 Generate an interactive map showing pack coverage.
 
@@ -312,7 +305,7 @@ Open in browser to explore regions and H3 cell coverage.
 
 ---
 
-## Step 8: Publish to GitHub Releases
+## Step 9: Publish to GitHub Releases
 
 Upload packs to GitHub releases for distribution.
 
@@ -323,14 +316,14 @@ uv sync
 # Dry run first
 uv run release-publisher \
     --registry /Volumes/Lightroom/pack_registry.json \
-    --db-dir /Volumes/Lightroom/packs \
+    --db-dir /Volumes/Lightroom/region_packs \
     --target-repo owner/birdnetpi-ebird-packs \
     --dry-run
 
 # Actual upload
 uv run release-publisher \
     --registry /Volumes/Lightroom/pack_registry.json \
-    --db-dir /Volumes/Lightroom/packs \
+    --db-dir /Volumes/Lightroom/region_packs \
     --target-repo owner/birdnetpi-ebird-packs \
     --workers 16
 ```
@@ -354,9 +347,6 @@ bird-dbs/
 │       ├── steps/                    # Pipeline step modules
 │       ├── models/                   # Pydantic models
 │       └── utils/                    # Shared utilities
-│
-├── analysis/
-│   └── pack-planner/                 # Region planning tool
 │
 ├── pack-manifest-visualizer/         # Map visualization
 │
@@ -382,11 +372,11 @@ bird-dbs/
 | 3a | Discover boundaries | `ebd partition --discover-only` | Read-only scan |
 | 3b | Partition data | `ebd partition` | Write-heavy |
 | 4 | Density report | `ebd density-report` | Seconds |
-| 4b | Size manifest | `ebd size-manifest` | Seconds |
-| 5 | Pack planning | `pack-planner` | Seconds |
-| 6 | Build packs | `ebd build` | ~98 regions |
-| 7 | Visualization | `pack-manifest-visualizer` | Optional |
-| 8 | GitHub upload | `release-publisher` | Network bound |
+| 5 | Pack planning | `ebd plan` | Seconds |
+| 6 | Build packs | `ebd build` | ~250 regions |
+| 7 | Package packs | `ebd package` | 30 min |
+| 8 | Visualization | `pack-manifest-visualizer` | Optional |
+| 9 | GitHub upload | `release-publisher` | Network bound |
 
 ---
 
@@ -398,13 +388,37 @@ bird-dbs/
 | `ebird_parquet/` | 118GB | Intermediate |
 | `ebird_by_location/` | 25GB | Sorted |
 | `ebird_partitioned/` | ~50GB | Hive-style |
-| `region_packs/` | ~19GB | Final output (~98 regions) |
+| `region_packs/` (uncompressed) | ~16GB | ~250 regions |
+| `region_packs/` (compressed) | ~4GB | Final output |
 | Temp space | 200GB | During sorting |
 | **Total working** | ~610GB | Peak usage |
 
 After completion, intermediate files can be deleted:
 - `ebird_parquet/` - Safe to delete after partitioning
 - `ebird_partitioned/` - Keep if you may need to rebuild
+
+---
+
+## Region Sizing Strategy
+
+The `ebd plan` command uses estimated sizes to group boundary cells into regions:
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| **Hard maximum** | 150 MB | Uncompressed .db file |
+| **Planning target** | 80 MB | Use `--max-region-size-mb 80` |
+| **Estimation accuracy** | ~80% | Actual sizes ~20% higher than estimates |
+| **Compressed size** | ~25% | Typical gzip compression ratio |
+
+**Why 80 MB target for 150 MB limit?**
+
+The size estimation uses checklist counts and is approximately 20% low. Planning at 80 MB results in actual packs of ~100-140 MB, safely under the 150 MB limit.
+
+**Results (Aug 2025 data):**
+- 250 regions globally
+- Largest uncompressed: 141 MB
+- Total uncompressed: ~16 GB
+- Total compressed: ~4 GB
 
 ---
 
@@ -416,11 +430,12 @@ eBird releases new data each August. To update:
 2. Run `ebd convert` (Step 1)
 3. Run `ebd sort` (Step 2)
 4. Run `ebd partition` (Steps 3a, 3b)
-5. Run `ebd density-report` and `ebd size-manifest` (Steps 4, 4b)
-6. Run `pack-planner` (Step 5)
+5. Run `ebd density-report` (Step 4)
+6. Run `ebd plan` (Step 5)
 7. Run `ebd build` (Step 6)
-8. Run `ebd verify` to check integrity
-9. Publish new release (Step 8)
+8. Run `ebd package` (Step 7)
+9. Run `ebd verify` to check integrity
+10. Publish new release with `release-publisher` (Step 9)
 
 The entire pipeline is idempotent and can be re-run safely.
 
@@ -436,9 +451,6 @@ bird-dbs/
 ├── [BUILDERS] ────────────────────────────────────────────────────────
 │   ├── ioc-builder/                   # IOC World Bird List -> SQLite
 │   └── wikidata-builder/              # Wikidata SPARQL -> SQLite
-│
-├── [ANALYSIS TOOLS] ──────────────────────────────────────────────────
-│   └── analysis/pack-planner/         # Python: Region partitioning
 │
 ├── [SUPPORT TOOLS] ───────────────────────────────────────────────────
 │   ├── avilistr-builder/              # R: Avibase taxonomy extraction
@@ -466,10 +478,9 @@ bird-dbs/
 - Ensure partitioned data is on SSD
 - Use `--region` to build specific regions
 
-### Regions still too large after size-aware planning
-- Reduce `--max-region-size-mb` in pack-planner (default: 250)
-- Check that size_manifest.json has complete data
-- Some high-density regions (e.g., Great Lakes) may exceed target slightly
+### Regions exceed 150 MB limit
+- Reduce `--max-region-size-mb` in plan step (use 80 or lower)
+- The estimation is ~20% low, so plan conservatively
 
 ### GitHub upload fails
 - Check `gh auth status`

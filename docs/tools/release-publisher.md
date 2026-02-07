@@ -23,7 +23,13 @@ This tool automates the process of publishing regional eBird species packs to Gi
 
 ## Prerequisites
 
-1. **GitHub CLI (`gh`)** - Must be installed and authenticated
+1. **Pre-packaged packs** - Run `ebd package` first to gzip packs with release-compatible naming:
+   ```bash
+   cd bird-dbs/ebd-pack-builder
+   uv run ebd package --packs-dir ./region_packs --registry ./pack_registry.json
+   ```
+
+2. **GitHub CLI (`gh`)** - Must be installed and authenticated
    ```bash
    # Install (macOS)
    brew install gh
@@ -32,7 +38,7 @@ This tool automates the process of publishing regional eBird species packs to Gi
    gh auth login
    ```
 
-2. **Python 3.11+** with `uv` package manager
+3. **Python 3.11+** with `uv` package manager
 
 ## Installation
 
@@ -117,32 +123,31 @@ The tool ensures proper attribution for the eBird Basic Dataset and Sampling Dat
 eBird Region Pack Release Publisher
 
 📄 Loading registry from pack_registry.json
-  Found 47 regions
+  Found 250 regions
 
 🔧 Initializing GitHub client for owner/birdnetpi-ebird-packs
   ✓ gh CLI authenticated
 
-📦 Collected 47 region files
-  Total size: 45678.9 MB
+📦 Collected 250 region files
+  Total size: 4123.5 MB (compressed)
 
-📊 Created 24 release bundles:
-  pack-bundle-001-2025.08: 8 regions, 1947.2 MB
-  pack-bundle-002-2025.08: 6 regions, 1935.4 MB
-  pack-bundle-003-2025.08: 7 regions, 1948.8 MB
-  ...
+📊 Created 3 release bundles:
+  pack-bundle-001-2025.08: 91 regions, 1847.2 MB
+  pack-bundle-002-2025.08: 131 regions, 1935.4 MB
+  pack-bundle-003-2025.08: 28 regions, 340.9 MB
 
-Uploading 24 bundle releases
+Uploading 3 bundle releases
   Workers: 8
   Dry run: False
 
   ✓ Created release pack-bundle-001-2025.08
-  ✓ Uploaded africa-east-2025.08.db.gz (234.5 MB)
-  ✓ Uploaded africa-west-2025.08.db.gz (189.2 MB)
+  ✓ Uploaded africa-001-2026.02.db.gz (12.5 MB)
+  ✓ Uploaded africa-002-2026.02.db.gz (8.3 MB)
   ...
   ✓ Uploaded ATTRIBUTION.txt
 
 Updating registry with download URLs
-  Updated 47 of 47 regions
+  Updated 250 of 250 regions
   ✓ Saved updated registry to pack_registry_with_urls.json
 
 Creating registry release: registry-2025.08
@@ -150,9 +155,9 @@ Creating registry release: registry-2025.08
   ✓ Uploaded pack_registry_with_urls.json
 
 📊 Summary
-  Bundles created: 24
+  Bundles created: 3
   Bundles skipped: 0
-  Regions with download URLs: 47
+  Regions with download URLs: 250
 
 ✅ Upload complete!
 ```

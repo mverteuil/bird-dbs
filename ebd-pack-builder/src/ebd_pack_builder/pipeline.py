@@ -17,7 +17,7 @@ class PipelineManager:
         "sort",
         "partition",
         "density_report",
-        "size_manifest",
+        "plan",
         "build",
         "verify",
     ]

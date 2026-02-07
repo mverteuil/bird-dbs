@@ -315,6 +315,67 @@ def build_single_region_pack(
     return result
 
 
+def generate_pack_registry(output_dir: Path, results: list[dict]) -> dict:
+    """Generate pack_registry.json for release-publisher.
+
+    Args:
+        output_dir: Directory containing built .db files
+        results: List of build result dicts
+
+    Returns:
+        Registry dict in release-publisher format
+    """
+    version = datetime.datetime.now().strftime("%Y.%m")
+    regions = []
+
+    for r in results:
+        region_id = r["region_id"]
+        boundary_cells = r.get("boundary_cells", [])
+
+        # Calculate bounding box from boundary cells
+        lats = []
+        lons = []
+        for cell_hex in boundary_cells:
+            try:
+                lat, lon = h3.cell_to_latlng(cell_hex)
+                lats.append(lat)
+                lons.append(lon)
+            except Exception:
+                continue
+
+        if lats and lons:
+            bbox = {
+                "min_lat": min(lats),
+                "max_lat": max(lats),
+                "min_lon": min(lons),
+                "max_lon": max(lons),
+            }
+        else:
+            bbox = {"min_lat": 0, "max_lat": 0, "min_lon": 0, "max_lon": 0}
+
+        regions.append({
+            "region_id": region_id,
+            "release_name": f"{region_id}-{version}",
+            "h3_cells": boundary_cells,
+            "pack_count": r.get("boundary_cell_count", len(boundary_cells)),
+            "total_size_mb": r.get("size_mb", 0),
+            "resolution": 4,  # Boundary resolution
+            "center": {
+                "lat": r.get("center_lat", 0),
+                "lon": r.get("center_lon", 0),
+            },
+            "bbox": bbox,
+        })
+
+    return {
+        "version": version,
+        "generated_at": datetime.datetime.now().isoformat(),
+        "total_regions": len(regions),
+        "total_packs": sum(r["pack_count"] for r in regions),
+        "regions": regions,
+    }
+
+
 def build_region_packs(
     partitioned_dir: Path,
     manifest_path: Path,
@@ -382,6 +443,11 @@ def build_region_packs(
         if skip_existing and output_path.exists():
             skipped += 1
             print(f"[{i}/{len(regions)}] {region_id}: SKIPPED (exists)")
+            # Load existing manifest to include in registry
+            manifest_path_existing = output_dir / f"{region_id}.manifest.json"
+            if manifest_path_existing.exists():
+                with open(manifest_path_existing) as f:
+                    all_results.append(json.load(f))
             continue
 
         region_start = time.time()
@@ -429,6 +495,14 @@ def build_region_packs(
     manifest_out_path = output_dir / f"regions_manifest_worker{worker_id}.json"
     with open(manifest_out_path, "w") as f:
         json.dump(combined_manifest, f, indent=2)
+
+    # Generate pack_registry.json for release-publisher (only for single worker or worker 0)
+    if total_workers == 1 or worker_id == 0:
+        registry = generate_pack_registry(output_dir, all_results)
+        registry_path = output_dir / "pack_registry.json"
+        with open(registry_path, "w") as f:
+            json.dump(registry, f, indent=2)
+        print(f"  Registry: {registry_path}")
 
     elapsed = time.time() - start_time
 

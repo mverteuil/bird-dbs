@@ -13,6 +13,27 @@ import duckdb
 from ebd_pack_builder.utils.formatting import format_duration
 
 
+def validate_parquet_file(file_path: Path) -> tuple[bool, int]:
+    """Validate a parquet file is readable and return row count.
+
+    Returns:
+        Tuple of (is_valid, row_count). If invalid, row_count is 0.
+    """
+    if not file_path.exists():
+        return False, 0
+
+    if file_path.stat().st_size == 0:
+        return False, 0
+
+    try:
+        con = duckdb.connect()
+        count = con.execute(f"SELECT COUNT(*) FROM read_parquet('{file_path}')").fetchone()
+        con.close()
+        return True, count[0] if count else 0
+    except Exception:
+        return False, 0
+
+
 # Partition configurations for each sort order
 PARTITION_CONFIGS = {
     "location": {
@@ -33,7 +54,8 @@ PARTITION_CONFIGS = {
             (10, 20),
             (20, 30),
             (30, 40),
-            (40, 50),
+            (40, 45),  # Split dense band (Western Europe, NE US)
+            (45, 50),  # Split dense band
             (50, 60),
             (60, 70),
             (70, 80),
@@ -202,8 +224,10 @@ def sort_chunked(
     input_dir: Path,
     output_dir: Path,
     sort_order: str = "location",
-    memory_limit: str = "24GB",
-    max_temp_size: str = "200GiB",
+    memory_limit: str = "28GB",
+    max_temp_size: str = "800GiB",
+    threads: int = 2,
+    skip_existing: bool = False,
 ) -> dict:
     """Sort data in partitions to reduce temp space requirements.
 
@@ -212,7 +236,9 @@ def sort_chunked(
         output_dir: Directory for sorted output
         sort_order: Sort order preset (location, date, taxon)
         memory_limit: DuckDB memory limit
-        max_temp_size: Max temp size per partition
+        max_temp_size: Max temp size per partition (default 800GiB for dense bands)
+        threads: Number of DuckDB threads (fewer = less memory, slower)
+        skip_existing: Skip partitions that already have valid output files
 
     Returns:
         Dict with metrics (total_rows, partitions, total_size_bytes, duration)
@@ -237,13 +263,15 @@ def sort_chunked(
     con.execute(f"SET memory_limit='{memory_limit}'")
     con.execute(f"SET max_temp_directory_size='{max_temp_size}'")
     con.execute("SET preserve_insertion_order=false")
-    con.execute("SET threads=2")
+    con.execute(f"SET threads={threads}")
 
     print("DuckDB configuration:")
     print(f"  Memory limit: {memory_limit}")
     print(f"  Temp directory: {temp_dir}")
     print(f"  Max temp size: {max_temp_size}")
-    print(f"  Threads: 2")
+    print(f"  Threads: {threads}")
+    if skip_existing:
+        print("  Skip existing: enabled")
     print()
 
     # Get input files (excluding macOS resource forks)
@@ -293,6 +321,28 @@ def sort_chunked(
             partition_name = f"lat_{low:+04d}_to_{high:+04d}".replace("+", "p").replace("-", "n")
 
         output_file = output_dir / f"ebird_{sort_order}_{partition_name}.parquet"
+
+        # Check if we should skip this partition
+        if skip_existing:
+            is_valid, existing_rows = validate_parquet_file(output_file)
+            if is_valid and existing_rows > 0:
+                file_size_mb = output_file.stat().st_size / (1024**2)
+                print(f"[{i}/{len(partitions)}] {partition_name}... SKIP (valid: {existing_rows:,} rows, {file_size_mb:.1f} MB)")
+                total_rows += existing_rows
+                partition_stats.append(
+                    {
+                        "name": partition_name,
+                        "rows": existing_rows,
+                        "size_mb": file_size_mb,
+                        "time": 0,
+                        "skipped": True,
+                    }
+                )
+                continue
+            elif output_file.exists():
+                # File exists but is invalid - remove it
+                print(f"[{i}/{len(partitions)}] {partition_name}... removing invalid file")
+                output_file.unlink()
 
         print(f"[{i}/{len(partitions)}] {partition_name}...", end=" ", flush=True)
 
