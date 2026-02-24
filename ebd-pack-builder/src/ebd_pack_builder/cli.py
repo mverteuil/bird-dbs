@@ -5,6 +5,16 @@ from pathlib import Path
 import click
 
 from ebd_pack_builder import __version__
+from ebd_pack_builder.pipeline import PipelineManager
+from ebd_pack_builder.steps.build_region_packs import build_region_packs
+from ebd_pack_builder.steps.convert_to_parquet import convert_tarball_to_parquet
+from ebd_pack_builder.steps.create_density_report import create_density_report
+from ebd_pack_builder.steps.create_size_manifest import create_size_manifest
+from ebd_pack_builder.steps.package_packs import package_packs
+from ebd_pack_builder.steps.partition_by_h3 import partition_by_h3
+from ebd_pack_builder.steps.plan_regions import plan_regions
+from ebd_pack_builder.steps.sort_by_location import sort_chunked
+from ebd_pack_builder.steps.verify_integrity import verify_parquet_integrity
 
 
 @click.group()
@@ -43,8 +53,6 @@ def convert(input_path: Path, output_dir: Path, chunk_size: int):
 
     Streams data directly from the tarball without extracting to disk.
     """
-    from ebd_pack_builder.steps.convert_to_parquet import convert_tarball_to_parquet
-
     if not input_path.suffix == ".tar":
         raise click.BadParameter(f"Input must be a .tar file, got: {input_path}")
 
@@ -109,8 +117,6 @@ def sort(
     Use --skip-existing to resume after a failure - valid completed partitions
     will be skipped, and invalid/incomplete ones will be re-processed.
     """
-    from ebd_pack_builder.steps.sort_by_location import sort_chunked
-
     result = sort_chunked(
         input_dir, output_dir, sort_order, memory_limit, max_temp_size, threads, skip_existing
     )
@@ -165,8 +171,6 @@ def partition(
     Preprocessing step that enables fast pack generation by partitioning
     all data by boundary cell.
     """
-    from ebd_pack_builder.steps.partition_by_h3 import partition_by_h3
-
     partition_by_h3(
         input_dir,
         output_dir,
@@ -195,8 +199,6 @@ def density_report(boundary_cells: Path, output: Path):
 
     Converts boundary_cells.json to density report format for pack-planner.
     """
-    from ebd_pack_builder.steps.create_density_report import create_density_report
-
     create_density_report(boundary_cells, output)
 
 
@@ -250,8 +252,6 @@ def plan(
     Groups boundary cells into downloadable regions optimized for
     distribution. Creates pack manifest for the build command.
     """
-    from ebd_pack_builder.steps.plan_regions import plan_regions
-
     plan_regions(
         density_report,
         output_manifest,
@@ -286,8 +286,6 @@ def size_manifest(packs_dir: Path, pack_manifest: Path, output: Path):
 
     Extracts actual sizes from built packs for pack-planner size-aware partitioning.
     """
-    from ebd_pack_builder.steps.create_size_manifest import create_size_manifest
-
     create_size_manifest(packs_dir, pack_manifest, output)
 
 
@@ -347,8 +345,6 @@ def build(
     Each region produces one SQLite pack containing data for all boundary
     cells in that region, with multi-resolution fallback.
     """
-    from ebd_pack_builder.steps.build_region_packs import build_region_packs
-
     build_region_packs(
         partitioned_dir,
         manifest,
@@ -384,8 +380,6 @@ def package(packs_dir: Path, registry: Path, compression_level: int):
 
     Gzips all .db files with release-compatible naming for the release-publisher tool.
     """
-    from ebd_pack_builder.steps.package_packs import package_packs
-
     package_packs(packs_dir, registry, compression_level)
 
 
@@ -408,8 +402,6 @@ def verify(directories: tuple[Path, ...], verbose: bool):
     Checks file readability, row counts, and schema consistency.
     Can compare multiple directories.
     """
-    from ebd_pack_builder.steps.verify_integrity import verify_parquet_integrity
-
     result = verify_parquet_integrity(list(directories), verbose)
     if not result["passed"]:
         raise SystemExit(1)
@@ -427,8 +419,6 @@ def status(state_dir: Path):
 
     Displays the completion status of each pipeline step.
     """
-    from ebd_pack_builder.pipeline import PipelineManager
-
     manager = PipelineManager(state_dir)
     manager.print_status()
 
@@ -455,7 +445,9 @@ def status(state_dir: Path):
 )
 @click.option(
     "--from-step",
-    type=click.Choice(["convert", "sort", "partition", "density_report", "plan", "build", "verify"]),
+    type=click.Choice(
+        ["convert", "sort", "partition", "density_report", "plan", "build", "verify"]
+    ),
     default=None,
     help="Resume from this step (skips earlier steps)",
 )
@@ -509,15 +501,6 @@ def run_all(
     6. build - Build region packs
     7. verify - Verify output integrity
     """
-    from ebd_pack_builder.pipeline import PipelineManager
-    from ebd_pack_builder.steps.build_region_packs import build_region_packs
-    from ebd_pack_builder.steps.convert_to_parquet import convert_tarball_to_parquet
-    from ebd_pack_builder.steps.create_density_report import create_density_report
-    from ebd_pack_builder.steps.partition_by_h3 import partition_by_h3
-    from ebd_pack_builder.steps.plan_regions import plan_regions
-    from ebd_pack_builder.steps.sort_by_location import sort_chunked
-    from ebd_pack_builder.steps.verify_integrity import verify_parquet_integrity
-
     # Setup directories
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -554,7 +537,7 @@ def run_all(
                 manager.complete_step("convert", parquet_dir, result)
             except Exception as e:
                 manager.fail_step("convert", str(e))
-                raise click.ClickException(f"Convert failed: {e}")
+                raise click.ClickException(f"Convert failed: {e}") from e
 
     # Step 2: Sort
     if "sort" in steps:
@@ -570,7 +553,7 @@ def run_all(
                 manager.complete_step("sort", sorted_dir, result)
             except Exception as e:
                 manager.fail_step("sort", str(e))
-                raise click.ClickException(f"Sort failed: {e}")
+                raise click.ClickException(f"Sort failed: {e}") from e
 
     # Step 3: Partition
     if "partition" in steps:
@@ -589,7 +572,7 @@ def run_all(
                 manager.complete_step("partition", partitioned_dir, result)
             except Exception as e:
                 manager.fail_step("partition", str(e))
-                raise click.ClickException(f"Partition failed: {e}")
+                raise click.ClickException(f"Partition failed: {e}") from e
 
     # Step 4: Density report
     if "density_report" in steps:
@@ -601,7 +584,11 @@ def run_all(
             if not boundary_cells_path.exists():
                 click.echo("[RUN] partition --discover-only: Discovering boundary cells")
                 partition_by_h3(
-                    sorted_dir, partitioned_dir, boundary_resolution, memory_limit, discover_only=True
+                    sorted_dir,
+                    partitioned_dir,
+                    boundary_resolution,
+                    memory_limit,
+                    discover_only=True,
                 )
 
             click.echo("[RUN] density_report: Creating density report")
@@ -612,7 +599,7 @@ def run_all(
                 manager.complete_step("density_report", density_report_path)
             except Exception as e:
                 manager.fail_step("density_report", str(e))
-                raise click.ClickException(f"Density report failed: {e}")
+                raise click.ClickException(f"Density report failed: {e}") from e
 
     # Step 5: Plan regions
     manifest_path = pack_manifest or (partitioned_dir / "pack_manifest.json")
@@ -635,7 +622,7 @@ def run_all(
                 manager.complete_step("plan", manifest_path, result)
             except Exception as e:
                 manager.fail_step("plan", str(e))
-                raise click.ClickException(f"Plan failed: {e}")
+                raise click.ClickException(f"Plan failed: {e}") from e
 
     # Step 6: Build packs
     if "build" in steps:
@@ -649,7 +636,7 @@ def run_all(
                 manager.complete_step("build", packs_dir, result)
             except Exception as e:
                 manager.fail_step("build", str(e))
-                raise click.ClickException(f"Build failed: {e}")
+                raise click.ClickException(f"Build failed: {e}") from e
 
     # Step 7: Verify
     if "verify" in steps:
@@ -665,7 +652,7 @@ def run_all(
                 manager.complete_step("verify", None, result)
             except Exception as e:
                 manager.fail_step("verify", str(e))
-                raise click.ClickException(f"Verify failed: {e}")
+                raise click.ClickException(f"Verify failed: {e}") from e
 
     click.echo()
     click.echo("=" * 60)

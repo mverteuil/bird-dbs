@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from ebd_pack_builder.models.state import PipelineState, StepResult, StepStatus
+from ebd_pack_builder.models.state import PipelineState, StepStatus
 
 
 class PipelineManager:
@@ -118,7 +118,7 @@ class PipelineManager:
             idx = self.STEPS.index(from_step)
             return self.STEPS[idx:]
         except ValueError:
-            raise ValueError(f"Unknown step: {from_step}. Valid steps: {self.STEPS}")
+            raise ValueError(f"Unknown step: {from_step}. Valid steps: {self.STEPS}") from None
 
     def print_status(self) -> None:
         """Print current pipeline status."""
