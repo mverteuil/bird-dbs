@@ -17,6 +17,7 @@ interface PackManifest {
       boundary_resolution?: number;
       data_resolution?: number;
       pack_id?: string;
+      total_checklists?: number;
     }>;
     center?: {
       lat?: number;
@@ -34,30 +35,63 @@ function generateHtml(manifestPath: string): string {
   // Show coverage at standard tiers: res 2 (regional), res 4 (metro), res 5 (hyperlocal)
   const TARGET_RESOLUTIONS = [2, 4, 5];
 
+  // Pack info type for tracking membership
+  interface PackInfo {
+    packId: string;
+    regionId: string;
+    boundaryCell: string;
+  }
+
   const regions = (manifest.regions || []).map(region => {
     const packs = region.packs || [];
+    const regionId = region.region_id || 'unknown';
 
-    const resolutionLayers = new Map<number, Set<string>>();
-    TARGET_RESOLUTIONS.forEach(r => resolutionLayers.set(r, new Set()));
+    // Track cells, checklist counts, and pack membership at each resolution
+    const resolutionLayers = new Map<number, Map<string, number>>();
+    const cellPacks = new Map<number, Map<string, PackInfo[]>>();
+    TARGET_RESOLUTIONS.forEach(r => {
+      resolutionLayers.set(r, new Map());
+      cellPacks.set(r, new Map());
+    });
 
     packs.forEach(pack => {
       const cell = pack.boundary_cell;
       const boundaryRes = pack.boundary_resolution;
+      const checklists = pack.total_checklists || 0;
+      const packInfo: PackInfo = {
+        packId: pack.pack_id || cell || 'unknown',
+        regionId,
+        boundaryCell: cell || ''
+      };
 
       if (cell && boundaryRes !== undefined) {
         TARGET_RESOLUTIONS.forEach(targetRes => {
           try {
+            const layerMap = resolutionLayers.get(targetRes)!;
+            const packsMap = cellPacks.get(targetRes)!;
+
             if (targetRes === boundaryRes) {
               // Exact match - use the cell directly
-              resolutionLayers.get(targetRes)!.add(cell);
+              layerMap.set(cell, (layerMap.get(cell) || 0) + checklists);
+              if (!packsMap.has(cell)) packsMap.set(cell, []);
+              packsMap.get(cell)!.push(packInfo);
             } else if (targetRes < boundaryRes) {
-              // Target is coarser - get parent
+              // Target is coarser - get parent, aggregate checklists
               const parent = cellToParent(cell, targetRes);
-              if (parent) resolutionLayers.get(targetRes)!.add(parent);
+              if (parent) {
+                layerMap.set(parent, (layerMap.get(parent) || 0) + checklists);
+                if (!packsMap.has(parent)) packsMap.set(parent, []);
+                packsMap.get(parent)!.push(packInfo);
+              }
             } else {
-              // Target is finer - get children
+              // Target is finer - get children, distribute checklists equally
               const children = cellToChildren(cell, targetRes);
-              children.forEach(child => resolutionLayers.get(targetRes)!.add(child));
+              const perChild = children.length > 0 ? Math.round(checklists / children.length) : 0;
+              children.forEach(child => {
+                layerMap.set(child, (layerMap.get(child) || 0) + perChild);
+                if (!packsMap.has(child)) packsMap.set(child, []);
+                packsMap.get(child)!.push(packInfo);
+              });
             }
           } catch (e) {
             // Some conversions may fail for edge cases
@@ -67,14 +101,16 @@ function generateHtml(manifestPath: string): string {
     });
 
     return {
-      id: region.region_id || 'unknown',
+      id: regionId,
       center: region.center || { lat: 0, lon: 0 },
       sizeMb: region.size_mb,
       packCount: region.pack_count || packs.length,
       resolutions: Array.from(resolutionLayers.entries())
-        .map(([res, cells]) => ({
+        .map(([res, cellMap]) => ({
           resolution: res,
-          cells: Array.from(cells)
+          cells: Array.from(cellMap.keys()),
+          checklists: Object.fromEntries(cellMap),
+          packs: Object.fromEntries(cellPacks.get(res)!)
         }))
         .filter(layer => layer.cells.length > 0)
         .sort((a, b) => a.resolution - b.resolution)
@@ -811,6 +847,29 @@ function generateHtml(manifestPath: string): string {
       box-shadow: var(--shadow-md);
     }
 
+    .zoom-lock-btn {
+      padding: var(--space-2) var(--space-3);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      font-size: var(--text-xs);
+      font-weight: 500;
+      color: var(--text-secondary);
+      box-shadow: var(--shadow-md);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .zoom-lock-btn:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .zoom-lock-btn.locked {
+      background: var(--color-primary-100);
+      border-color: var(--color-primary-300);
+      color: var(--color-primary-700);
+    }
+
     /* Loading Overlay */
     .loading-overlay {
       position: absolute;
@@ -1219,6 +1278,7 @@ function generateHtml(manifestPath: string): string {
       <!-- Map Controls Overlay -->
       <div class="map-controls-overlay">
         <div class="zoom-display" id="zoomDisplay" aria-live="polite">Zoom: 2</div>
+        <button id="zoomLockBtn" class="zoom-lock-btn" title="Lock zoom when switching regions">🔓 Unlocked</button>
       </div>
     </main>
   </div>
@@ -1255,6 +1315,7 @@ function generateHtml(manifestPath: string): string {
     let currentLayers = [];
     let selectedRegion = null;
     let allRegionsCombined = null;
+    let zoomLocked = false;
 
     // ===== Toast System =====
     const Toast = {
@@ -1585,10 +1646,27 @@ function generateHtml(manifestPath: string): string {
     // ===== Create Combined Region =====
     function createCombinedRegion() {
       const combined = new Map();
+      const combinedChecklists = new Map();
+      const combinedPacks = new Map();
       REGIONS.forEach(region => {
         region.resolutions.forEach(resLayer => {
-          if (!combined.has(resLayer.resolution)) combined.set(resLayer.resolution, new Set());
-          resLayer.cells.forEach(cell => combined.get(resLayer.resolution).add(cell));
+          if (!combined.has(resLayer.resolution)) {
+            combined.set(resLayer.resolution, new Set());
+            combinedChecklists.set(resLayer.resolution, {});
+            combinedPacks.set(resLayer.resolution, {});
+          }
+          resLayer.cells.forEach(cell => {
+            combined.get(resLayer.resolution).add(cell);
+            // Aggregate checklists
+            const checklists = combinedChecklists.get(resLayer.resolution);
+            const count = resLayer.checklists && resLayer.checklists[cell] ? resLayer.checklists[cell] : 0;
+            checklists[cell] = (checklists[cell] || 0) + count;
+            // Aggregate packs
+            const packs = combinedPacks.get(resLayer.resolution);
+            const cellPacks = resLayer.packs && resLayer.packs[cell] ? resLayer.packs[cell] : [];
+            if (!packs[cell]) packs[cell] = [];
+            packs[cell] = packs[cell].concat(cellPacks);
+          });
         });
       });
 
@@ -1596,7 +1674,12 @@ function generateHtml(manifestPath: string): string {
         id: 'ALL REGIONS',
         center: { lat: 20, lon: 0 },
         resolutions: Array.from(combined.entries()).map(function(entry) {
-          return { resolution: entry[0], cells: Array.from(entry[1]) };
+          return {
+            resolution: entry[0],
+            cells: Array.from(entry[1]),
+            checklists: combinedChecklists.get(entry[0]),
+            packs: combinedPacks.get(entry[0])
+          };
         })
       };
     }
@@ -1721,8 +1804,10 @@ function generateHtml(manifestPath: string): string {
       currentLayers.forEach(layer => map.removeLayer(layer));
       currentLayers = [];
 
-      // Zoom to region
-      map.setView([region.center.lat, region.center.lon], region.id === 'ALL REGIONS' ? 2 : 5);
+      // Zoom to region (unless zoom is locked)
+      if (!zoomLocked) {
+        map.setView([region.center.lat, region.center.lon], region.id === 'ALL REGIONS' ? 2 : 5);
+      }
 
       // Render controls
       renderResolutionControls(region);
@@ -1816,6 +1901,12 @@ function generateHtml(manifestPath: string): string {
             return;
           }
 
+          // Skip cells with no checklists (e.g., from rounding when distributing to children)
+          const checklistCount = resLayer.checklists && resLayer.checklists[cell] ? resLayer.checklists[cell] : 0;
+          if (checklistCount === 0) {
+            return;
+          }
+
           const polygon = L.polygon(
             boundary.map(c => [c[0], c[1]]),
             {
@@ -1842,17 +1933,64 @@ function generateHtml(manifestPath: string): string {
 
           const popupBody = document.createElement('div');
           popupBody.className = 'hex-popup-body';
-          const popupRow = document.createElement('div');
-          popupRow.className = 'hex-popup-row';
-          const label = document.createElement('span');
-          label.className = 'hex-popup-label';
-          label.textContent = 'Cell Index';
-          popupRow.appendChild(label);
-          const value = document.createElement('code');
-          value.className = 'hex-popup-value';
-          value.textContent = cell;
-          popupRow.appendChild(value);
-          popupBody.appendChild(popupRow);
+
+          // Cell Index row
+          const cellRow = document.createElement('div');
+          cellRow.className = 'hex-popup-row';
+          const cellLabel = document.createElement('span');
+          cellLabel.className = 'hex-popup-label';
+          cellLabel.textContent = 'Cell Index';
+          cellRow.appendChild(cellLabel);
+          const cellValue = document.createElement('code');
+          cellValue.className = 'hex-popup-value';
+          cellValue.textContent = cell;
+          cellRow.appendChild(cellValue);
+          popupBody.appendChild(cellRow);
+
+          // Checklists row (checklistCount already defined above)
+          const checklistRow = document.createElement('div');
+          checklistRow.className = 'hex-popup-row';
+          const checklistLabel = document.createElement('span');
+          checklistLabel.className = 'hex-popup-label';
+          checklistLabel.textContent = 'Checklists';
+          checklistRow.appendChild(checklistLabel);
+          const checklistValue = document.createElement('span');
+          checklistValue.className = 'hex-popup-value';
+          checklistValue.textContent = checklistCount.toLocaleString();
+          checklistRow.appendChild(checklistValue);
+          popupBody.appendChild(checklistRow);
+
+          // Regions row - show which region packs this cell belongs to
+          const cellPacks = resLayer.packs && resLayer.packs[cell] ? resLayer.packs[cell] : [];
+          if (cellPacks.length > 0) {
+            // Get unique regions
+            const regionSet = new Set();
+            cellPacks.forEach(function(pack) {
+              regionSet.add(pack.regionId);
+            });
+            const regions = Array.from(regionSet).sort();
+
+            const regionsRow = document.createElement('div');
+            regionsRow.className = 'hex-popup-row';
+            regionsRow.style.flexDirection = 'column';
+            regionsRow.style.alignItems = 'flex-start';
+            const regionsLabel = document.createElement('span');
+            regionsLabel.className = 'hex-popup-label';
+            regionsLabel.textContent = regions.length === 1 ? 'Region' : 'Regions (' + regions.length + ')';
+            regionsRow.appendChild(regionsLabel);
+
+            const regionsList = document.createElement('div');
+            regionsList.style.cssText = 'max-height: 120px; overflow-y: auto; width: 100%; margin-top: 4px;';
+
+            regions.forEach(function(regionId) {
+              const regionItem = document.createElement('div');
+              regionItem.style.cssText = 'font-size: 12px; padding: 2px 0;';
+              regionItem.textContent = regionId;
+              regionsList.appendChild(regionItem);
+            });
+            regionsRow.appendChild(regionsList);
+            popupBody.appendChild(regionsRow);
+          }
 
           const copyBtn = document.createElement('button');
           copyBtn.className = 'hex-popup-copy';
@@ -1910,6 +2048,15 @@ function generateHtml(manifestPath: string): string {
       SearchManager.init();
       KeyboardNav.init();
       ExportManager.init();
+
+      // Zoom lock button
+      const zoomLockBtn = document.getElementById('zoomLockBtn');
+      zoomLockBtn.addEventListener('click', () => {
+        zoomLocked = !zoomLocked;
+        zoomLockBtn.textContent = zoomLocked ? '🔒 Locked' : '🔓 Unlocked';
+        zoomLockBtn.classList.toggle('locked', zoomLocked);
+        Toast.info(zoomLocked ? 'Zoom locked' : 'Zoom unlocked', 'Switching regions will ' + (zoomLocked ? 'keep' : 'change') + ' the current view');
+      });
 
       console.log('Pack Manifest Visualizer initialized');
     }

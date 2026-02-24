@@ -49,6 +49,13 @@ shared/avilistr/*.csv
 
 # Output databases (build artifacts)
 output/
+*-builder/*.db
+*-builder/**/*.db
+
+# Visualizer output
+pack-manifest-visualizer/visualization-output/
+pack-manifest-visualizer/--output/
+pack-manifest-visualizer/-o/
 
 # Temporary files
 *.tmp
