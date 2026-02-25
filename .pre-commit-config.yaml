@@ -63,7 +63,7 @@ repos:
         exclude: ^wikidata-builder/tests/
         args: ['--project', 'wikidata-builder']
   - repo: https://github.com/semgrep/semgrep
-    rev: 'v1.136.0'
+    rev: 'v1.152.0'
     hooks:
       - id: semgrep
         args:
