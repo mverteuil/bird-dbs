@@ -21,7 +21,7 @@ import json
 import sys
 from pathlib import Path
 
-from wikidata_database_builder import WikidataDatabaseBuilder
+from wikidata_reference_builder.wikidata_database_builder import WikidataDatabaseBuilder
 
 
 def main():
