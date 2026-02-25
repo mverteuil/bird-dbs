@@ -317,7 +317,9 @@ def sort_chunked(
         else:  # range (latitude bands)
             low, high = partition  # type: ignore
             col = config["partition_column"]
-            partition_filter = f'CAST("{col}" AS DOUBLE) >= {low} AND CAST("{col}" AS DOUBLE) < {high}'
+            partition_filter = (
+                f'CAST("{col}" AS DOUBLE) >= {low} AND CAST("{col}" AS DOUBLE) < {high}'
+            )
             partition_name = f"lat_{low:+04d}_to_{high:+04d}".replace("+", "p").replace("-", "n")
 
         output_file = output_dir / f"ebird_{sort_order}_{partition_name}.parquet"
@@ -327,7 +329,9 @@ def sort_chunked(
             is_valid, existing_rows = validate_parquet_file(output_file)
             if is_valid and existing_rows > 0:
                 file_size_mb = output_file.stat().st_size / (1024**2)
-                print(f"[{i}/{len(partitions)}] {partition_name}... SKIP (valid: {existing_rows:,} rows, {file_size_mb:.1f} MB)")
+                print(
+                    f"[{i}/{len(partitions)}] {partition_name}... SKIP (valid: {existing_rows:,} rows, {file_size_mb:.1f} MB)"
+                )
                 total_rows += existing_rows
                 partition_stats.append(
                     {
@@ -347,7 +351,9 @@ def sort_chunked(
         print(f"[{i}/{len(partitions)}] {partition_name}...", end=" ", flush=True)
 
         try:
-            rows = sort_partition(con, input_files, output_file, partition_filter, config["sort_columns"])
+            rows = sort_partition(
+                con, input_files, output_file, partition_filter, config["sort_columns"]
+            )
 
             partition_time = time.time() - partition_start
             file_size_mb = output_file.stat().st_size / (1024**2)

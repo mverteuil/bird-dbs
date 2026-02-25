@@ -93,7 +93,7 @@ def create_density_report(
         json.dump(density_report, f, indent=2)
 
     # Print summary
-    print(f"Density Report Summary:")
+    print("Density Report Summary:")
     print(f"  Total cells: {density_report['total_cells']:,}")
     print(f"  Total checklists: {density_report['total_checklists']:,}")
     print(f"  Total observations: {density_report['total_observations']:,}")
@@ -104,7 +104,7 @@ def create_density_report(
     cells_with_10k = sum(1 for c in cells if c["unique_checklists"] >= 10000)
     cells_with_100k = sum(1 for c in cells if c["unique_checklists"] >= 100000)
 
-    print(f"\nCoverage by checklist threshold:")
+    print("\nCoverage by checklist threshold:")
     print(f"  >= 1,000 checklists: {cells_with_1k:,} cells")
     print(f"  >= 10,000 checklists: {cells_with_10k:,} cells")
     print(f"  >= 100,000 checklists: {cells_with_100k:,} cells")

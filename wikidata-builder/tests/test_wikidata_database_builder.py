@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -97,13 +98,13 @@ class TestWikidataDatabaseBuilder:
             assert '"nb"' in query
             assert '"eu"' in query
 
-    @patch("wikidata_reference_builder.wikidata_database_builder.requests.get")
+    @patch("wikidata_reference_builder.wikidata_database_builder.requests.get", autospec=True)
     def test_query_species_data(self, mock_get, builder, sample_sparql_species_response):
         """Should query species data from Wikidata."""
         # Mock requests.get response
-        mock_response = MagicMock()
+        mock_response = MagicMock(spec=requests.Response)
         mock_response.json.return_value = sample_sparql_species_response
-        mock_response.raise_for_status = MagicMock()
+        mock_response.raise_for_status = MagicMock(spec=requests.Response.raise_for_status)
         mock_get.return_value = mock_response
 
         species_data = builder._query_species_data()
@@ -113,7 +114,7 @@ class TestWikidataDatabaseBuilder:
         assert species_data[0]["avibase_id"] == "ABC123DEF456"
         assert species_data[0]["scientific_name"] == "Struthio camelus"
 
-    @patch("wikidata_reference_builder.wikidata_database_builder.requests.get")
+    @patch("wikidata_reference_builder.wikidata_database_builder.requests.get", autospec=True)
     def test_query_multilingual_labels(
         self,
         mock_get,
@@ -123,9 +124,9 @@ class TestWikidataDatabaseBuilder:
     ):
         """Should query multilingual labels from Wikidata."""
         # Mock requests.get response
-        mock_response = MagicMock()
+        mock_response = MagicMock(spec=requests.Response)
         mock_response.json.return_value = sample_sparql_labels_response
-        mock_response.raise_for_status = MagicMock()
+        mock_response.raise_for_status = MagicMock(spec=requests.Response.raise_for_status)
         mock_get.return_value = mock_response
 
         # Parse species data first
@@ -195,13 +196,13 @@ class TestWikidataDatabaseBuilder:
         assert len(filtered) == 1
         assert filtered[0]["common_name"] == "Test Bird"
 
-    @patch("wikidata_reference_builder.wikidata_database_builder.requests.get")
+    @patch("wikidata_reference_builder.wikidata_database_builder.requests.get", autospec=True)
     def test_insert_species(self, mock_get, builder, sample_sparql_species_response):
         """Should insert species into database."""
         # Mock requests.get response
-        mock_response = MagicMock()
+        mock_response = MagicMock(spec=requests.Response)
         mock_response.json.return_value = sample_sparql_species_response
-        mock_response.raise_for_status = MagicMock()
+        mock_response.raise_for_status = MagicMock(spec=requests.Response.raise_for_status)
         mock_get.return_value = mock_response
 
         species_data = builder._query_species_data()
@@ -259,7 +260,9 @@ class TestWikidataDatabaseBuilder:
 
     def test_handle_api_timeout(self, builder):
         """Should handle API timeout errors."""
-        with patch("wikidata_reference_builder.wikidata_database_builder.requests.get") as mock_get:
+        with patch(
+            "wikidata_reference_builder.wikidata_database_builder.requests.get", autospec=True
+        ) as mock_get:
             mock_get.side_effect = Exception("Timeout")
 
             with pytest.raises(Exception, match="Timeout"):
@@ -267,11 +270,13 @@ class TestWikidataDatabaseBuilder:
 
     def test_handle_empty_response(self, builder):
         """Should handle empty API responses."""
-        with patch("wikidata_reference_builder.wikidata_database_builder.requests.get") as mock_get:
+        with patch(
+            "wikidata_reference_builder.wikidata_database_builder.requests.get", autospec=True
+        ) as mock_get:
             # Mock requests.get response with empty results
-            mock_response = MagicMock()
+            mock_response = MagicMock(spec=requests.Response)
             mock_response.json.return_value = {"results": {"bindings": []}}
-            mock_response.raise_for_status = MagicMock()
+            mock_response.raise_for_status = MagicMock(spec=requests.Response.raise_for_status)
             mock_get.return_value = mock_response
 
             species_data = builder._query_species_data()
@@ -542,7 +547,7 @@ class TestWikidataDatabaseBuilderErrorPaths:
 
         engine = create_engine(f"sqlite:///{builder.db_path}")
         with Session(engine) as session:
-            species = session.execute(select(WikidataSpecies)).scalars().all()
+            session.execute(select(WikidataSpecies)).scalars().all()
             # Implementation may filter or store - just verify it doesn't crash
             assert True  # Made it this far without error
 

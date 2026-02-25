@@ -94,9 +94,9 @@ def create_size_manifest(
     print("=" * 60)
     print(f"  Regions processed: {regions_processed}")
     print(f"  Cells mapped: {len(cells)}")
-    print(f"  Total size: {total_size_mb:.1f} MB ({total_size_mb/1024:.2f} GB)")
+    print(f"  Total size: {total_size_mb:.1f} MB ({total_size_mb / 1024:.2f} GB)")
     if cells:
-        print(f"  Average per cell: {total_size_mb/len(cells):.2f} MB")
+        print(f"  Average per cell: {total_size_mb / len(cells):.2f} MB")
     print(f"  Output: {output_path}")
 
     return output

@@ -176,7 +176,15 @@ def build_single_region_pack(
         # Process data for this resolution
         cell_species_data: dict[tuple, dict] = {}
 
-        for h3_cell, avibase_id, scientific_name, month, species_count, total_count, frequency in result:
+        for (
+            h3_cell,
+            avibase_id,
+            scientific_name,
+            month,
+            species_count,
+            _total_count,
+            frequency,
+        ) in result:
             key = (h3_cell, avibase_id)
             cells_by_resolution[resolution].add(h3_cell)
 
@@ -353,19 +361,21 @@ def generate_pack_registry(output_dir: Path, results: list[dict]) -> dict:
         else:
             bbox = {"min_lat": 0, "max_lat": 0, "min_lon": 0, "max_lon": 0}
 
-        regions.append({
-            "region_id": region_id,
-            "release_name": f"{region_id}-{version}",
-            "h3_cells": boundary_cells,
-            "pack_count": r.get("boundary_cell_count", len(boundary_cells)),
-            "total_size_mb": r.get("size_mb", 0),
-            "resolution": 4,  # Boundary resolution
-            "center": {
-                "lat": r.get("center_lat", 0),
-                "lon": r.get("center_lon", 0),
-            },
-            "bbox": bbox,
-        })
+        regions.append(
+            {
+                "region_id": region_id,
+                "release_name": f"{region_id}-{version}",
+                "h3_cells": boundary_cells,
+                "pack_count": r.get("boundary_cell_count", len(boundary_cells)),
+                "total_size_mb": r.get("size_mb", 0),
+                "resolution": 4,  # Boundary resolution
+                "center": {
+                    "lat": r.get("center_lat", 0),
+                    "lon": r.get("center_lon", 0),
+                },
+                "bbox": bbox,
+            }
+        )
 
     return {
         "version": version,

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, select, text
@@ -457,8 +458,6 @@ class TestIOCDatabaseBuilderErrorPaths:
 
     def test_null_handling_in_optional_fields(self, builder):
         """Should handle null values in optional fields gracefully."""
-        import numpy as np
-
         data = pd.DataFrame(
             {
                 "Order": ["PASSERIFORMES"],
@@ -488,7 +487,7 @@ class TestIOCDatabaseBuilderErrorPaths:
 
         translations = builder._parse_multilingual_data(data)
         assert all(t["language_code"].islower() for t in translations)
-        assert set(t["language_code"] for t in translations) == {"es", "fr"}
+        assert {t["language_code"] for t in translations} == {"es", "fr"}
 
     def test_scientific_name_special_characters(self, builder):
         """Should handle special characters in scientific names."""

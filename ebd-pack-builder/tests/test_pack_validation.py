@@ -497,8 +497,7 @@ def find_pack_for_location(lat: float, lon: float) -> Path | None:
         try:
             conn = sqlite3.connect(pack_path)
             cursor = conn.execute(
-                "SELECT COUNT(*) FROM grid_species WHERE h3_cell = ?",
-                (int(h3_cell, 16),)
+                "SELECT COUNT(*) FROM grid_species WHERE h3_cell = ?", (int(h3_cell, 16),)
             )
             count = cursor.fetchone()[0]
             conn.close()
@@ -525,8 +524,7 @@ def get_species_data(
 
     # First get avibase_id for the species
     cursor = conn.execute(
-        "SELECT avibase_id FROM species_lookup WHERE scientific_name = ?",
-        (scientific_name,)
+        "SELECT avibase_id FROM species_lookup WHERE scientific_name = ?", (scientific_name,)
     )
     row = cursor.fetchone()
     if not row:
@@ -550,7 +548,7 @@ def get_species_data(
             FROM grid_species
             WHERE h3_cell = ? AND resolution = ? AND avibase_id = ?
             """,
-            (cell_int, res, avibase_id)
+            (cell_int, res, avibase_id),
         )
         row = cursor.fetchone()
         if row:
@@ -565,7 +563,7 @@ def get_species_data(
                     FROM grid_species_monthly
                     WHERE h3_cell = ? AND resolution = ? AND avibase_id = ? AND month = ?
                     """,
-                    (cell_int, res, avibase_id, month)
+                    (cell_int, res, avibase_id, month),
                 )
                 monthly = cursor.fetchone()
                 if monthly:
@@ -589,13 +587,13 @@ class TestPackValidation:
         return [p for p in available if not p.name.startswith(".")]
 
     def test_packs_exist(self, pack_availability):
-        """Verify at least some packs have been built."""
+        """Should verify at least some packs have been built."""
         assert len(pack_availability) > 0, "No packs found in packs directory"
         print(f"Found {len(pack_availability)} pack files")
 
     @pytest.mark.parametrize("test_case", TEST_CASES, ids=lambda tc: tc.name)
     def test_species_occurrence(self, test_case: SpeciesTestCase):
-        """Test species occurrence matches expected tier."""
+        """Should match species occurrence with expected tier."""
         pack_path = find_pack_for_location(test_case.lat, test_case.lon)
 
         if pack_path is None:
@@ -657,7 +655,7 @@ class TestPackValidation:
 
     @pytest.mark.parametrize("test_case", BOOST_TEST_CASES, ids=lambda tc: tc.name)
     def test_confidence_boost(self, test_case: BoostTestCase):
-        """Test that confidence boost values are appropriate for species rarity."""
+        """Should have appropriate confidence boost values for species rarity."""
         pack_path = find_pack_for_location(test_case.lat, test_case.lon)
 
         if pack_path is None:
@@ -677,18 +675,15 @@ class TestPackValidation:
 
         if test_case.expected_boost_direction == "positive":
             assert boost >= 1.0, (
-                f"Expected positive boost (>=1.0) for {test_case.scientific_name}, "
-                f"got {boost:.3f}"
+                f"Expected positive boost (>=1.0) for {test_case.scientific_name}, got {boost:.3f}"
             )
         elif test_case.expected_boost_direction == "negative":
             assert boost < 1.0, (
-                f"Expected negative boost (<1.0) for {test_case.scientific_name}, "
-                f"got {boost:.3f}"
+                f"Expected negative boost (<1.0) for {test_case.scientific_name}, got {boost:.3f}"
             )
         else:  # neutral
             assert 0.7 <= boost <= 1.3, (
-                f"Expected neutral boost (0.7-1.3) for {test_case.scientific_name}, "
-                f"got {boost:.3f}"
+                f"Expected neutral boost (0.7-1.3) for {test_case.scientific_name}, got {boost:.3f}"
             )
 
 
@@ -709,9 +704,7 @@ def run_validation_report():
             results["skip"] += 1
             continue
 
-        species_data = get_species_data(
-            pack_path, tc.scientific_name, tc.lat, tc.lon, tc.month
-        )
+        species_data = get_species_data(pack_path, tc.scientific_name, tc.lat, tc.lon, tc.month)
 
         if tc.expected_tier == "absent":
             if species_data is None:
@@ -751,17 +744,23 @@ def run_validation_report():
                     results["pass"] += 1
                 elif tier_diff == 1:
                     print(f"WARN: {tc.name}")
-                    print(f"      Expected {tc.expected_tier}, got {species_data['confidence_tier']}")
+                    print(
+                        f"      Expected {tc.expected_tier}, got {species_data['confidence_tier']}"
+                    )
                     results["warn"] += 1
                 else:
                     print(f"FAIL: {tc.name}")
-                    print(f"      Expected {tc.expected_tier}, got {species_data['confidence_tier']}")
+                    print(
+                        f"      Expected {tc.expected_tier}, got {species_data['confidence_tier']}"
+                    )
                     results["fail"] += 1
 
     print()
     print("=" * 70)
-    print(f"TIER TESTS: {results['pass']} pass, {results['warn']} warn, "
-          f"{results['fail']} fail, {results['skip']} skip")
+    print(
+        f"TIER TESTS: {results['pass']} pass, {results['warn']} warn, "
+        f"{results['fail']} fail, {results['skip']} skip"
+    )
     print("=" * 70)
 
     # Run boost tests
@@ -785,7 +784,7 @@ def run_validation_report():
 
         if species_data is None:
             print(f"SKIP: {tc.name}")
-            print(f"      Species not found in pack")
+            print("      Species not found in pack")
             boost_results["skip"] += 1
             continue
 
@@ -822,8 +821,10 @@ def run_validation_report():
 
     print()
     print("=" * 70)
-    print(f"BOOST TESTS: {boost_results['pass']} pass, "
-          f"{boost_results['fail']} fail, {boost_results['skip']} skip")
+    print(
+        f"BOOST TESTS: {boost_results['pass']} pass, "
+        f"{boost_results['fail']} fail, {boost_results['skip']} skip"
+    )
     print("=" * 70)
 
     # Combined summary

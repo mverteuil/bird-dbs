@@ -10,6 +10,7 @@ This script determines:
 Goal: Reduce distributed asset size by only including unique content.
 """
 
+import json
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
@@ -48,7 +49,7 @@ class TranslationOverlapAnalyzer:
             "recommendations": self._generate_recommendations(overlap_analysis, size_analysis),
         }
 
-    def _load_ioc_translations(self) -> dict[str, dict[str, dict[str, str]]]:
+    def _load_ioc_translations(self) -> dict[str, dict[str, str]]:
         """
         Load IOC translations.
 
@@ -68,7 +69,7 @@ class TranslationOverlapAnalyzer:
         conn.close()
         return dict(data)
 
-    def _load_wikidata_translations(self) -> dict[str, dict[str, dict[str, str]]]:
+    def _load_wikidata_translations(self) -> dict[str, dict[str, str]]:
         """
         Load Wikidata translations.
 
@@ -424,8 +425,6 @@ def main():
     print_analysis_report(analysis)
 
     # Save to JSON
-    import json
-
     output_path = Path("../data/translation_overlap_analysis.json")
     with open(output_path, "w") as f:
         json.dump(analysis, f, indent=2)

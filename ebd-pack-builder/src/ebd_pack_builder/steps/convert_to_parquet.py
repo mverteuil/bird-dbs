@@ -93,8 +93,7 @@ def convert_tarball_to_parquet(
         # Find the .txt.gz file (skip macOS resource fork files starting with "._")
         members = tar.getmembers()
         txt_gz_members = [
-            m for m in members
-            if m.name.endswith(".txt.gz") and not m.name.startswith("._")
+            m for m in members if m.name.endswith(".txt.gz") and not m.name.startswith("._")
         ]
 
         if not txt_gz_members:
@@ -124,9 +123,7 @@ def convert_tarball_to_parquet(
                 # Convert None values to empty strings and filter out None keys
                 # (DictReader returns None for empty fields, and trailing tabs create None keys)
                 clean_row = {
-                    k: (v if v is not None else "")
-                    for k, v in row.items()
-                    if k is not None
+                    k: (v if v is not None else "") for k, v in row.items() if k is not None
                 }
                 chunk_rows.append(clean_row)
 
@@ -183,7 +180,7 @@ def convert_tarball_to_parquet(
         # Calculate total output size
         total_size = sum(f.stat().st_size for f in output_dir.glob("*.parquet"))
 
-        print(f"\nConversion complete!")
+        print("\nConversion complete!")
         print(f"  Total rows: {total_rows:,}")
         print(f"  Total chunks: {chunk_num}")
         print(f"  Total size: {format_size(total_size)}")

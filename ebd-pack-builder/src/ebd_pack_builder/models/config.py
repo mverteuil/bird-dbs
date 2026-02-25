@@ -19,9 +19,7 @@ class PipelineConfig(BaseModel):
     partitioned_dir: Path | None = Field(
         default=None, description="Directory for H3-partitioned parquet"
     )
-    packs_dir: Path | None = Field(
-        default=None, description="Directory for output SQLite packs"
-    )
+    packs_dir: Path | None = Field(default=None, description="Directory for output SQLite packs")
 
     # Step parameters
     chunk_size: int = Field(default=1_000_000, description="Rows per parquet chunk")

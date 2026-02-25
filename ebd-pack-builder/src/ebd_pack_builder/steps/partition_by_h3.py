@@ -82,7 +82,9 @@ def discover_boundary_cells(
         top_cells = cells[:5]
         print("  Top 5 cells by checklists:")
         for c in top_cells:
-            print(f"    {c['boundary_cell']}: {c['checklist_count']:,} checklists, {c['species_count']} species")
+            print(
+                f"    {c['boundary_cell']}: {c['checklist_count']:,} checklists, {c['species_count']} species"
+            )
 
     return cells
 

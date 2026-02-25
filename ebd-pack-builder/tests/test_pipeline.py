@@ -1,5 +1,6 @@
 """Tests for pipeline state management."""
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -81,8 +82,6 @@ class TestStepResult:
 
     def test_duration_seconds(self):
         """Should calculate duration."""
-        from datetime import datetime, timedelta
-
         step = StepResult()
         step.started_at = datetime.now()
         step.completed_at = step.started_at + timedelta(seconds=120)

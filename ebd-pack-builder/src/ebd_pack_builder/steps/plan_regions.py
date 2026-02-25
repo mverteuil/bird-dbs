@@ -180,8 +180,7 @@ def plan_regions(
         if total_size > max_region_size_mb:
             # Sort geographically (by latitude, then longitude) for spatial coherence
             sorted_cells = sorted(
-                group_cells,
-                key=lambda c: (round(c["center_lat"], 0), round(c["center_lon"], 0))
+                group_cells, key=lambda c: (round(c["center_lat"], 0), round(c["center_lon"], 0))
             )
             current_chunk: list[dict] = []
             current_size = 0.0
@@ -220,7 +219,7 @@ def plan_regions(
 
     print(f"\nRegions created: {len(regions)}")
     print(f"Total packs: {total_packs:,}")
-    print(f"Estimated total size: {total_size_mb:.1f} MB ({total_size_mb/1024:.2f} GB)")
+    print(f"Estimated total size: {total_size_mb:.1f} MB ({total_size_mb / 1024:.2f} GB)")
     print(f"Total checklists: {total_checklists:,}")
     print()
 
@@ -233,7 +232,7 @@ def plan_regions(
     print("Region size distribution:")
     for bucket in sorted(size_buckets.keys()):
         count = size_buckets[bucket]
-        print(f"  {bucket}-{bucket+99} MB: {count} regions")
+        print(f"  {bucket}-{bucket + 99} MB: {count} regions")
 
     # Write manifest
     manifest = {
