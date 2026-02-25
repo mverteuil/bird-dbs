@@ -70,7 +70,7 @@ repos:
           - '--config=auto'
           - '--error'
         files: '^(ioc-builder|wikidata-builder)/.*\.py$'
-        language_version: python3.12
+        language_version: python3.11
         additional_dependencies: []
         verbose: false
   - repo: https://github.com/boidolr/ast-grep-pre-commit

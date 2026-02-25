@@ -38,6 +38,13 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
 
+      - name: Install project dependencies for pyright
+        run: |
+          # Install ioc-builder dependencies
+          cd ioc-builder && uv sync && cd ..
+          # Install wikidata-builder dependencies
+          cd wikidata-builder && uv sync && cd ..
+
       - name: Run pre-commit
         uses: pre-commit/action@v3.0.1
         with:
